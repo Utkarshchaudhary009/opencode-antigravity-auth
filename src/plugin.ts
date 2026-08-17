@@ -37,7 +37,7 @@ import { EmptyResponseError } from "./plugin/errors";
 import { AntigravityTokenRefreshError, refreshAccessToken } from "./plugin/token";
 import { checkAccountsQuota } from "./plugin/quota";
 import { clearAccounts, loadAccounts } from "./plugin/storage";
-import { AccountManager, type ManagedAccount, type ModelFamily, type RateLimitReason, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs } from "./plugin/accounts";
+import { AccountManager, type ManagedAccount, type ModelFamily, type RateLimitReason, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs, getGraceRetryDelayMs } from "./plugin/accounts";
 import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
 import { loadConfig, mergeRuntimeOptions, initRuntimeConfig, type AntigravityConfig } from "./plugin/config";
 import { createSessionRecoveryHook, getRecoverySuccessToast } from "./plugin/recovery";
@@ -263,7 +263,14 @@ async function openBrowser(url: string): Promise<boolean> {
   }
 }
 
-function retryAfterMsFromResponse(response: Response, defaultRetryMs: number = 60_000): number {
+/**
+ * Extract a retry delay from the 429 response headers, or null when the
+ * response carried NO retry info at all. Callers must distinguish "no server
+ * retry info" from "server retry info present": passing the default here would
+ * make a 429 without any retry hint look like a real (long) server retry and
+ * would defeat the state-based grace-retry fallback.
+ */
+function retryAfterMsFromResponse(response: Response): number | null {
   const retryAfterMsHeader = response.headers.get("retry-after-ms");
   if (retryAfterMsHeader) {
     const parsed = Number.parseInt(retryAfterMsHeader, 10);
@@ -280,7 +287,7 @@ function retryAfterMsFromResponse(response: Response, defaultRetryMs: number = 6
     }
   }
 
-  return defaultRetryMs;
+  return null;
 }
 
 /**
@@ -971,6 +978,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
               config.quota_refresh_interval_minutes,
             );
 
+            // Grace margin added to computed rate-limit/quota reset waits so the
+            // plugin never races the raw reset boundary and immediately re-429s.
+            const graceMs = config.grace_to_deadline_ms;
+
             let account = accountManager.getCurrentOrNextForFamily(
               family, 
               model, 
@@ -979,6 +990,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               config.pid_offset_enabled,
               config.soft_quota_threshold_percent,
               softQuotaCacheTtlMs,
+              graceMs,
             );
 
             if (!account && allowQuotaFallback) {
@@ -992,6 +1004,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 config.pid_offset_enabled,
                 config.soft_quota_threshold_percent,
                 softQuotaCacheTtlMs,
+                graceMs,
               );
               if (account) {
                 pushDebug(
@@ -1003,7 +1016,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (!account) {
               if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
                 const threshold = config.soft_quota_threshold_percent;
-                const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model);
+                const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model, graceMs);
                 const maxWaitMs = (config.max_rate_limit_wait_seconds ?? 300) * 1000;
                 
                 if (softQuotaWaitMs === null || (maxWaitMs > 0 && softQuotaWaitMs > maxWaitMs)) {
@@ -1038,6 +1051,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 model,
                 preferredHeaderStyle,
                 strictWait,
+                graceMs,
               ) || 60_000;
               const waitSecValue = Math.max(1, Math.ceil(waitMs / 1000));
 
@@ -1478,9 +1492,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   const defaultRetryMs = (config.default_retry_after_seconds ?? 60) * 1000;
                   const maxBackoffMs = (config.max_backoff_seconds ?? 60) * 1000;
-                  const headerRetryMs = retryAfterMsFromResponse(response, defaultRetryMs);
+                  const headerRetryMs = retryAfterMsFromResponse(response);
                   const bodyInfo = await extractRetryInfoFromBody(response);
-                  const serverRetryMs = bodyInfo.retryDelayMs ?? headerRetryMs;
+                  const serverRetryMs = bodyInfo.retryDelayMs ?? headerRetryMs ?? defaultRetryMs;
+                  // Whether the CURRENT 429 actually carried server retry info
+                  // (Retry-After / retry-after-ms header, body retryDelay, or
+                  // quota reset). Only a real value should drive the current-429
+                  // grace branch; when the 429 had NO retry info we must pass
+                  // null so getGraceRetryDelayMs falls back to the strict
+                  // headerStyle state-based min-wait instead of treating the 60s
+                  // default as if the server asked us to wait 60s.
+                  const hasRetryInfo = headerRetryMs !== null || bodyInfo.retryDelayMs !== null;
 
                   // [Enhanced Parsing] Pass status to handling logic
                   const rateLimitReason = parseRateLimitReason(bodyInfo.reason, bodyInfo.message, response.status);
@@ -1567,12 +1589,40 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   // Progressive retry for standard 429s: 1st 429 -> 1s then switch (if enabled) or retry same
                   if (attempt === 1 && rateLimitReason !== "QUOTA_EXHAUSTED") {
+                    // GraceRetry: eligibility uses the CURRENT 429's raw server
+                    // retry time (Retry-After / body retryDelay / quota reset)
+                    // against the 2s optimistic window WITHOUT the grace margin;
+                    // the returned delay adds the grace margin and is still
+                    // bounded by the cache-first same-account wait cap. When the
+                    // 429 carried no retry info (hasRetryInfo === false) we fall
+                    // back to the account-state min-wait restricted to the
+                    // 429'd headerStyle (strict mode) so a short reset in the
+                    // OTHER pool can't create false eligibility.
+                    const maxCacheFirstWaitMs = config.max_cache_first_wait_seconds * 1000;
+                    const graceRetryDelayMs = getGraceRetryDelayMs(accountManager, family, model, graceMs, hasRetryInfo ? serverRetryMs : null, headerStyle);
+                    // A duplicate backoff (isDuplicate) means a 429 for this
+                    // account+quota already happened within the 2s dedup window.
+                    // Because the grace delay is usually < 2s, the dedup would
+                    // keep `attempt` pinned at 1, so the grace branch would retry
+                    // the SAME account forever without ever escalating to
+                    // markRateLimitedWithReason / rotation. Skip the grace branch
+                    // for duplicates so they fall through to the normal
+                    // rate-limit path; the first 429 (isDuplicate=false) still
+                    // gets the optimistic grace retry.
+                    if (!isDuplicate && graceRetryDelayMs !== null && graceRetryDelayMs <= maxCacheFirstWaitMs) {
+                      pushDebug(`grace-retry: optimistic same-account retry family=${family} delayMs=${graceRetryDelayMs} graceMs=${graceMs}`);
+                      await showToast(`Rate limited. Retrying same account in ~${Math.max(1, Math.round(graceRetryDelayMs / 1000))}s (grace margin)...`, "warning");
+                      await sleep(graceRetryDelayMs, abortSignal);
+                      // Retry the SAME endpoint/account immediately
+                      i -= 1;
+                      continue;
+                    }
+
                     await showToast(`Rate limited. Quick retry in 1s...`, "warning");
                     await sleep(FIRST_RETRY_DELAY_MS, abortSignal);
                     
                     // CacheFirst mode: wait for same account if within threshold (preserves prompt cache)
                     if (config.scheduling_mode === 'cache_first') {
-                      const maxCacheFirstWaitMs = config.max_cache_first_wait_seconds * 1000;
                       // effectiveDelayMs is the backoff calculated for this account
                       if (effectiveDelayMs <= maxCacheFirstWaitMs) {
                         pushDebug(`cache_first: waiting ${effectiveDelayMs}ms for same account to recover`);
@@ -2126,5 +2176,8 @@ export const __testExports = {
   getHeaderStyleFromUrl,
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,
+  getGraceRetryDelayMs,
+  getRateLimitBackoff,
+  resetRateLimitState,
 };
 

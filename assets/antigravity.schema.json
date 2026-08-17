@@ -219,6 +219,13 @@
       "maximum": 5000,
       "description": "Maximum random jitter in milliseconds added to outgoing requests to avoid thundering herd."
     },
+    "grace_to_deadline_ms": {
+      "default": 1500,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Grace margin in milliseconds added to computed rate-limit/quota reset waits. Prevents racing the reset boundary and immediately re-429ing."
+    },
     "soft_quota_threshold_percent": {
       "default": 90,
       "type": "number",

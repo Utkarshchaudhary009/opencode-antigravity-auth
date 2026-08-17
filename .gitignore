@@ -47,6 +47,8 @@ auth.json
 # Test artifacts
 test-file.ts
 src/**/*.test.ts
+!src/plugin/grace-retry.test.ts
+!src/plugin/quota.test.ts
 src/**/*.test.tsx
 src/**/*.spec.ts
 src/**/*.spec.tsx

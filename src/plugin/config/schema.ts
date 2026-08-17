@@ -385,6 +385,17 @@ export const AntigravityConfigSchema = z.object({
    request_jitter_max_ms: z.number().min(0).max(5000).default(0),
    
    /**
+    * Grace margin in milliseconds added to computed rate-limit/quota reset waits.
+    * 
+    * Prevents racing the reset boundary: an account is only considered usable
+    * once `now` has passed its reset time by at least this margin, so the plugin
+    * avoids immediately re-429ing when the server has not refreshed quota yet.
+    * 
+    * @default 1500
+    */
+   grace_to_deadline_ms: z.number().min(0).max(10_000).default(1500),
+   
+   /**
     * Soft quota threshold percentage (1-100).
     * When an account's quota usage reaches this percentage, skip it during
     * account selection (same as if it were rate-limited).
@@ -490,6 +501,7 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   default_retry_after_seconds: 60,
   max_backoff_seconds: 60,
   request_jitter_max_ms: 0,
+  grace_to_deadline_ms: 1500,
   soft_quota_threshold_percent: 90,
   quota_refresh_interval_minutes: 15,
   soft_quota_cache_ttl_minutes: "auto",

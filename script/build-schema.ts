@@ -62,6 +62,8 @@ const optionDescriptions: Record<string, string> = {
     "Time in seconds before a failed account is eligible for retry.",
   request_jitter_max_ms:
     "Maximum random jitter in milliseconds added to outgoing requests to avoid thundering herd.",
+  grace_to_deadline_ms:
+    "Grace margin in milliseconds added to computed rate-limit/quota reset waits. Prevents racing the reset boundary and immediately re-429ing.",
   soft_quota_threshold_percent:
     "Percentage of quota usage that triggers soft quota warnings and preemptive account switching.",
   quota_refresh_interval_minutes:

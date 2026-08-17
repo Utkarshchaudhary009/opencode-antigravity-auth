@@ -428,6 +428,7 @@ type LoadBalancerSettings = {
   default_retry_after_seconds: number;
   max_backoff_seconds: number;
   request_jitter_max_ms: number;
+  grace_to_deadline_ms: number;
   soft_quota_threshold_percent: number;
   quota_refresh_interval_minutes: number;
   cli_first: boolean;
@@ -443,6 +444,7 @@ const SETTINGS_KEYS: Array<keyof LoadBalancerSettings> = [
   "default_retry_after_seconds",
   "max_backoff_seconds",
   "request_jitter_max_ms",
+  "grace_to_deadline_ms",
   "soft_quota_threshold_percent",
   "quota_refresh_interval_minutes",
   "cli_first",
@@ -459,6 +461,7 @@ function getDefaultLoadBalancerSettings(): LoadBalancerSettings {
     default_retry_after_seconds: DEFAULT_CONFIG.default_retry_after_seconds,
     max_backoff_seconds: DEFAULT_CONFIG.max_backoff_seconds,
     request_jitter_max_ms: DEFAULT_CONFIG.request_jitter_max_ms,
+    grace_to_deadline_ms: DEFAULT_CONFIG.grace_to_deadline_ms,
     soft_quota_threshold_percent: DEFAULT_CONFIG.soft_quota_threshold_percent,
     quota_refresh_interval_minutes: DEFAULT_CONFIG.quota_refresh_interval_minutes,
     cli_first: DEFAULT_CONFIG.cli_first,
@@ -733,6 +736,11 @@ function showLoadBalancerSettingsDialog(api: TuiApi): void {
       category: "Timing",
     },
     {
+      title: `Grace to deadline (ms): ${settings.grace_to_deadline_ms}`,
+      value: "set:grace_to_deadline_ms",
+      category: "Timing",
+    },
+    {
       title: `Soft quota threshold (%): ${settings.soft_quota_threshold_percent}`,
       value: "set:soft_quota_threshold_percent",
       category: "Quota",
@@ -810,6 +818,10 @@ function showLoadBalancerSettingsDialog(api: TuiApi): void {
             showNumericPrompt(api, "Request jitter max ms", settings.request_jitter_max_ms, 0, 5000, () => showLoadBalancerSettingsDialog(api), key);
             return;
           }
+          if (key === "grace_to_deadline_ms") {
+            showNumericPrompt(api, "Grace to deadline ms", settings.grace_to_deadline_ms, 0, 10000, () => showLoadBalancerSettingsDialog(api), key);
+            return;
+          }
           if (key === "soft_quota_threshold_percent") {
             showNumericPrompt(api, "Soft quota threshold percent", settings.soft_quota_threshold_percent, 1, 100, () => showLoadBalancerSettingsDialog(api), key);
             return;
@@ -835,6 +847,7 @@ function showLoadBalancerSettingsDialog(api: TuiApi): void {
               `default_retry_after_seconds=${settings.default_retry_after_seconds}`,
               `max_backoff_seconds=${settings.max_backoff_seconds}`,
               `request_jitter_max_ms=${settings.request_jitter_max_ms}`,
+              `grace_to_deadline_ms=${settings.grace_to_deadline_ms}`,
               `soft_quota_threshold_percent=${settings.soft_quota_threshold_percent}`,
               `quota_refresh_interval_minutes=${settings.quota_refresh_interval_minutes}`,
               `config=${path}`,
@@ -1050,7 +1063,7 @@ async function runQuotaCheck(api: TuiApi, accountIndex?: number, onBack?: () => 
     if (result.geminiCliQuota?.models?.length) {
       for (const model of result.geminiCliQuota.models) {
         lines.push(
-          `  Gemini CLI ${model.modelId}: ${Math.round(model.remainingFraction * 100)}%${formatReset(model.resetTime)}`,
+          `  Gemini CLI ${model.modelId}: ${formatQuotaPercent(model.remainingFraction)}${formatReset(model.resetTime)}`,
         );
       }
     } else if (result.geminiCliQuota?.error) {

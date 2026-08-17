@@ -486,12 +486,16 @@ export function logCacheStats(
 export function logQuotaStatus(
   accountEmail: string | undefined,
   accountIndex: number,
-  quotaPercent: number,
+  quotaPercent: number | undefined,
   family?: string,
 ): void {
   runWithDebugEnabled(() => {
     const accountLabel = formatAccountLabel(accountEmail, accountIndex);
     const familyInfo = family ? ` family=${family}` : "";
+    if (quotaPercent === undefined) {
+      logDebug(`[Quota] ${accountLabel} remaining=unknown status=UNKNOWN${familyInfo}`);
+      return;
+    }
     const status = quotaPercent <= 0 ? "EXHAUSTED" : quotaPercent < 20 ? "LOW" : "OK";
     logDebug(`[Quota] ${accountLabel} remaining=${quotaPercent.toFixed(1)}% status=${status}${familyInfo}`);
   });

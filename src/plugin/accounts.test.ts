@@ -1404,6 +1404,71 @@ describe("AccountManager", () => {
         expect(manager.shouldTryOptimisticReset("gemini")).toBe(false);
       });
 
+      it("grace margin delays the usable check (rate-limited past raw reset)", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000);
+
+        const stored: AccountStorageV4 = {
+          version: 4,
+          accounts: [
+            // Raw reset at 11_000ms; with graceMs=1500 account stays rate-limited until 12_500ms.
+            { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0, rateLimitResetTimes: { "gemini-antigravity": 11_000, "gemini-cli": 11_000 } },
+          ],
+          activeIndex: 0,
+        };
+
+        const manager = new AccountManager(undefined, stored);
+
+        // Without grace the account is usable at the raw reset boundary.
+        expect(manager.getMinWaitTimeForFamily("gemini")).toBe(1000);
+
+        // With grace the usable time is pushed past the boundary.
+        expect(manager.getMinWaitTimeForFamily("gemini", undefined, undefined, false, 1500)).toBe(2500);
+
+        // The account is not selected while still inside the grace window.
+        vi.setSystemTime(11_500);
+        expect(manager.getNextForFamily("gemini", undefined, "antigravity", 100, 10 * 60 * 1000, 1500)).toBeNull();
+        // But it is usable without grace.
+        expect(manager.getNextForFamily("gemini", undefined, "antigravity", 100, 10 * 60 * 1000, 0)).not.toBeNull();
+
+        vi.useRealTimers();
+      });
+
+      it("shouldTryOptimisticReset accounts for grace when computing the min-wait", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000);
+
+        const stored: AccountStorageV4 = {
+          version: 4,
+          accounts: [
+            // Raw reset 500ms out -> with graceMs=1500 min-wait is 2000ms (still eligible).
+            { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0, rateLimitResetTimes: { "gemini-antigravity": 10_500, "gemini-cli": 10_500 } },
+          ],
+          activeIndex: 0,
+        };
+
+        const manager = new AccountManager(undefined, stored);
+
+        // Without grace the margin is small and eligible.
+        expect(manager.shouldTryOptimisticReset("gemini", undefined, 0)).toBe(true);
+        // With grace the min-wait grows, but is still inside the 2s optimistic window.
+        expect(manager.shouldTryOptimisticReset("gemini", undefined, 1500)).toBe(true);
+
+        // A raw reset 2s out plus grace exceeds the 2s optimistic window.
+        const stored2: AccountStorageV4 = {
+          version: 4,
+          accounts: [
+            { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0, rateLimitResetTimes: { "gemini-antigravity": 12_000, "gemini-cli": 12_000 } },
+          ],
+          activeIndex: 0,
+        };
+        const manager2 = new AccountManager(undefined, stored2);
+        expect(manager2.shouldTryOptimisticReset("gemini", undefined, 0)).toBe(true);
+        expect(manager2.shouldTryOptimisticReset("gemini", undefined, 1500)).toBe(false);
+
+        vi.useRealTimers();
+      });
+
       it("clearAllRateLimitsForFamily clears rate limits and failure counters", () => {
         vi.useFakeTimers();
         vi.setSystemTime(10_000);
@@ -1841,6 +1906,61 @@ describe("AccountManager", () => {
 
       const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000);
       expect(waitMs).toBe(null);
+
+      vi.useRealTimers();
+    });
+
+    it("does not apply grace to a stale resetTime in the past (fail-open null)", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-28T16:00:00Z"));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      manager.updateQuotaCache(0, {
+        claude: {
+          remainingFraction: 0.05,
+          resetTime: "2026-01-28T15:00:00Z",
+          modelCount: 1,
+        },
+      });
+
+      // Grace must not force a ≥1.5s wait when the raw reset is already in the past.
+      const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000, null, 1500);
+      expect(waitMs).toBe(null);
+
+      vi.useRealTimers();
+    });
+
+    it("still adds grace to a future resetTime", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-28T10:00:00Z"));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      manager.updateQuotaCache(0, {
+        claude: {
+          remainingFraction: 0.05,
+          resetTime: "2026-01-28T15:00:00Z",
+          modelCount: 1,
+        },
+      });
+
+      const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000, null, 1500);
+      expect(waitMs).toBe(5 * 60 * 60 * 1000 + 1500);
 
       vi.useRealTimers();
     });

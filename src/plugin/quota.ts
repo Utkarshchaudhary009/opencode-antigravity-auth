@@ -1,6 +1,7 @@
 import {
   ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_PROVIDER_ID,
+  getAntigravityHeaders,
 } from "../constants";
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
 import { resolveCachedAuth } from "./cache";
@@ -37,7 +38,8 @@ export interface QuotaSummary {
 // Gemini CLI quota types
 export interface GeminiCliQuotaModel {
   modelId: string;
-  remainingFraction: number;
+  /** Remaining fraction clamped to [0, 1], or undefined when unknown (fail-open). */
+  remainingFraction: number | undefined;
   resetTime?: string;
 }
 
@@ -83,14 +85,14 @@ function buildAuthFromAccount(account: AccountMetadataV3): OAuthAuthDetails {
   };
 }
 
-function normalizeRemainingFraction(value: unknown): number {
-  // If value is missing or invalid, treat as exhausted (0%)
+function normalizeRemainingFraction(value: unknown): number | undefined {
+  // Fail-open: missing or invalid input is UNKNOWN (undefined), NOT 0%.
+  // Downstream treats undefined as "usable/unknown" rather than instantly
+  // exhausting an account on a data glitch. Valid numbers clamp to [0, 1].
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 0;
+    return undefined;
   }
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
+  return Math.min(1, Math.max(0, value));
 }
 
 function parseResetTime(resetTime?: string): number | null {
@@ -401,9 +403,12 @@ export async function checkAccountsQuota(
         updatedAccount,
       });
       
-      // Log quota status for each family
+      // Log quota status for each family (undefined fraction => unknown, not exhausted)
       for (const [family, groupQuota] of Object.entries(quotaResult.groups)) {
-        const remainingPercent = (groupQuota.remainingFraction ?? 0) * 100;
+        const remainingPercent =
+          groupQuota.remainingFraction === undefined
+            ? undefined
+            : groupQuota.remainingFraction * 100;
         logQuotaStatus(account.email, index, remainingPercent, family);
       }
     } catch (error) {
@@ -428,3 +433,9 @@ export async function checkAccountsQuota(
   logQuotaFetch("complete", accounts.length, `ok=${results.filter(r => r.status === "ok").length} errors=${results.filter(r => r.status === "error").length}`);
   return results;
 }
+
+// Test-only exports to allow direct unit testing of quota normalization logic.
+export const __testExports = {
+  normalizeRemainingFraction,
+  aggregateGeminiCliQuota,
+};
