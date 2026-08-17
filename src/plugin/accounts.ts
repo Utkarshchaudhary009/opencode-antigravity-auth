@@ -21,6 +21,26 @@ export type RateLimitReason =
   | "SERVER_ERROR"
   | "UNKNOWN";
 
+// ============================================================================
+// Active AccountManager registry
+//
+// quota.ts (and other modules without a direct reference) resolve the freshest
+// per-account token state through this registry instead of re-reading the
+// account file. The in-memory record is updated in place by proactive token
+// refresh (rotation), so it can hold a newer refresh token than the last
+// persisted disk snapshot.
+// ============================================================================
+
+let activeAccountManager: AccountManager | null = null;
+
+export function setActiveAccountManager(manager: AccountManager | null): void {
+  activeAccountManager = manager;
+}
+
+export function getActiveAccountManager(): AccountManager | null {
+  return activeAccountManager;
+}
+
 export interface RateLimitBackoffResult {
   backoffMs: number;
   reason: RateLimitReason;
@@ -447,7 +467,9 @@ export class AccountManager {
 
   static async loadFromDisk(authFallback?: OAuthAuthDetails): Promise<AccountManager> {
     const stored = await loadAccounts();
-    return new AccountManager(authFallback, stored);
+    const manager = new AccountManager(authFallback, stored);
+    setActiveAccountManager(manager);
+    return manager;
   }
 
   constructor(authFallback?: OAuthAuthDetails, stored?: AccountStorageV4 | null) {

@@ -3,7 +3,13 @@ import {
   ANTIGRAVITY_PROVIDER_ID,
 } from "../constants";
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
+import {
+  getActiveAccountManager,
+  type AccountManager,
+  type ManagedAccount,
+} from "./accounts";
 import { resolveCachedAuth } from "./cache";
+import type { CloudCodeRouteState } from "./cloud-code";
 import { logQuotaFetch, logQuotaStatus } from "./debug";
 import {
   fetchAvailableModelsCatalog,
@@ -12,7 +18,7 @@ import {
 import { createLogger } from "./logger";
 import { ensureProjectContext } from "./project";
 import { initAntigravityRuntimeMetadata } from "./runtime-metadata";
-import { refreshAccessToken } from "./token";
+import { AntigravityTokenRefreshError, refreshAccessToken } from "./token";
 import { getModelFamily } from "./transform/model-resolver";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import type { AccountMetadataV3 } from "./storage";
@@ -83,6 +89,233 @@ function buildAuthFromAccount(account: AccountMetadataV3): OAuthAuthDetails {
     access: undefined,
     expires: undefined,
   };
+}
+
+/**
+ * Known GCP-ToS route state per refresh token, discovered in this process via
+ * `ensureProjectContext` (server-reported `usesGcpTos`). Used to pick the
+ * refresh OAuth client when the stored `isGcpTos` flag is stale or absent
+ * (e.g., accounts added before GCP-ToS flows existed).
+ */
+const ROUTE_STATE_MAX_ENTRIES = 16;
+const routeStateByRefreshToken = new Map<string, CloudCodeRouteState>();
+
+function recordRouteState(refreshToken: string | undefined, routeState: CloudCodeRouteState | undefined): void {
+  if (!refreshToken || routeState?.usesGcpTos === undefined) {
+    return;
+  }
+  routeStateByRefreshToken.set(refreshToken, routeState);
+  // Rotations keep minting new refresh tokens; cap the map so it cannot grow
+  // unbounded across a long-lived process. Evict the oldest entry first (Map
+  // iteration is insertion-ordered).
+  if (routeStateByRefreshToken.size > ROUTE_STATE_MAX_ENTRIES) {
+    const oldest = routeStateByRefreshToken.keys().next().value;
+    if (oldest !== undefined) {
+      routeStateByRefreshToken.delete(oldest);
+    }
+  }
+}
+
+function getKnownRouteState(...refreshTokens: Array<string | undefined>): CloudCodeRouteState | undefined {
+  for (const token of refreshTokens) {
+    if (!token) {
+      continue;
+    }
+    const state = routeStateByRefreshToken.get(token);
+    if (state) {
+      return state;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the effective isGcpTos flag used to pick the OAuth client for refresh.
+ *
+ * The CURRENT GCP-ToS route state (server-reported `usesGcpTos`, which also
+ * drives getCloudCodeEndpointOrder/resolveCloudCodeBaseUrl) wins over the
+ * stored account flag: the stored flag can be stale or absent, and refreshing
+ * under the wrong client produces invalid_grant. Falls back to the standard
+ * client only when no signal exists.
+ */
+function resolveRefreshIsGcpTos(stored: boolean | undefined, routeState: CloudCodeRouteState | undefined): boolean {
+  const current = routeState?.usesGcpTos;
+  if (current !== undefined) {
+    if (stored !== undefined && stored !== current) {
+      log.debug("quota-gcp-tos-flag-stale", { stored, current });
+    }
+    return current;
+  }
+  return stored ?? false;
+}
+
+/**
+ * Locate the AccountManager's in-memory record for a quota-check account.
+ * The in-memory record can hold a newer (rotated) refresh token than the
+ * passed account metadata. Matching priority: refresh token, then email.
+ * The storage-position fallback is used ONLY when the snapshot has no email:
+ * `index` here is the position in the (possibly filtered) account array, not
+ * the manager's absolute index, so it can mis-match filtered subsets.
+ */
+function findInMemoryAccount(
+  manager: AccountManager | null,
+  account: AccountMetadataV3,
+  index: number,
+): ManagedAccount | null {
+  if (!manager) {
+    return null;
+  }
+  const accounts = manager.getAccounts();
+  const byToken = accounts.find((acc) => acc.parts.refreshToken === account.refreshToken);
+  if (byToken) {
+    return byToken;
+  }
+  if (account.email) {
+    return accounts.find((acc) => acc.email === account.email) ?? null;
+  }
+  // Email absent on the snapshot: fall back to storage position as a last resort.
+  return accounts.find((acc) => acc.index === index) ?? null;
+}
+
+/**
+ * Build auth for a quota check from the freshest available token state:
+ * the AccountManager's in-memory record (post-rotation) when one matches,
+ * otherwise the existing disk-snapshot path. isGcpTos is resolved against
+ * current route state so a stale/absent stored flag cannot select the wrong
+ * refresh client.
+ */
+function buildFreshAuth(
+  account: AccountMetadataV3,
+  inMemoryAccount: ManagedAccount | null,
+  routeState: CloudCodeRouteState | undefined,
+): OAuthAuthDetails {
+  if (inMemoryAccount) {
+    return {
+      type: "oauth",
+      refresh: formatRefreshParts({
+        ...inMemoryAccount.parts,
+        // Fall back to the disk snapshot's flag when the in-memory flag is not
+        // explicitly set (e.g. the record was loaded before the flag existed,
+        // or updateFromAuth zeroed it: refreshAccessToken drops isGcpTos from
+        // its packed output, so `parts.isGcpTos` round-trips to `false`).
+        isGcpTos: resolveRefreshIsGcpTos(
+          inMemoryAccount.parts.isGcpTos ?? account.isGcpTos ?? undefined,
+          routeState,
+        ),
+      }),
+      access: inMemoryAccount.access,
+      expires: inMemoryAccount.expires,
+    };
+  }
+  const auth = buildAuthFromAccount(account);
+  const parts = parseRefreshParts(auth.refresh);
+  const isGcpTos = resolveRefreshIsGcpTos(parts.isGcpTos, routeState);
+  if (parts.isGcpTos === isGcpTos) {
+    return auth;
+  }
+  return {
+    ...auth,
+    refresh: formatRefreshParts({ ...parts, isGcpTos }),
+  };
+}
+
+/**
+ * Refresh an expired access token for a quota check, retrying ONCE against the
+ * freshest in-memory account state when the first attempt throws
+ * `AntigravityTokenRefreshError`. That failure usually means our auth was built
+ * from a stale snapshot: Google rotates refresh tokens on every refresh, so the
+ * proactive refresh queue can have rotated the token (or the route state can
+ * have changed the required OAuth client) after we resolved auth from disk.
+ * Non-token errors propagate immediately; the outer caller keeps its fail-open
+ * behavior.
+ *
+ * Every successful refresh is propagated back into the AccountManager's
+ * in-memory record (mirroring refresh-queue.ts:184 / plugin.ts:1144) so the
+ * NEXT quota check resolves the rotated token in memory instead of re-refreshing
+ * the already-rotated-away token on disk (which would 400 invalid_grant).
+ */
+async function refreshWithRetry(
+  auth: OAuthAuthDetails,
+  account: AccountMetadataV3,
+  index: number,
+  client: PluginClient,
+  providerId: string,
+): Promise<OAuthAuthDetails> {
+  if (!accessTokenExpired(auth)) {
+    return auth;
+  }
+
+  const manager = getActiveAccountManager();
+  const initialInMemoryAccount = findInMemoryAccount(manager, account, index);
+
+  // Keep the in-memory record in sync with the freshest rotated token. Without
+  // this, the next check would match the stale in-memory record (by email) and
+  // prefer it over the freshly persisted disk token, re-refreshing a token that
+  // Google already rotated away -> invalid_grant again.
+  const propagateToMemory = (inMemoryAccount: ManagedAccount | null, refreshed: OAuthAuthDetails): void => {
+    if (manager && inMemoryAccount) {
+      manager.updateFromAuth(inMemoryAccount, refreshed);
+    }
+  };
+
+  try {
+    const refreshed = await refreshAccessToken(auth, client, providerId);
+    if (!refreshed) {
+      log.error("quota-refresh-returned-empty", {
+        index,
+        email: account.email,
+        hasCachedQuota: !!account.cachedQuota,
+        hasProjectId: !!account.projectId,
+        hasManagedProjectId: !!account.managedProjectId,
+      });
+      throw new Error("Access token refresh did not return a usable token. Check antigravity token logs for the exact failure.");
+    }
+    propagateToMemory(initialInMemoryAccount, refreshed);
+    return refreshed;
+  } catch (error) {
+    if (!(error instanceof AntigravityTokenRefreshError)) {
+      throw error;
+    }
+
+    log.debug("quota-refresh-retry-in-memory", {
+      index,
+      email: account.email,
+      code: error.code,
+    });
+
+    // Re-resolve against the CURRENT in-memory state: the background refresh
+    // queue may have completed a rotation since we first built auth, and the
+    // server-reported route state may now be known (client-id selection).
+    const inMemoryAccount = findInMemoryAccount(manager, account, index);
+    const routeState = getKnownRouteState(
+      account.refreshToken,
+      inMemoryAccount?.parts.refreshToken,
+    );
+    const retryAuth = resolveCachedAuth(buildFreshAuth(account, inMemoryAccount, routeState));
+
+    if (!accessTokenExpired(retryAuth)) {
+      // The in-memory rotation already produced a fresh access token.
+      return retryAuth;
+    }
+
+    try {
+      const retried = await refreshAccessToken(retryAuth, client, providerId);
+      if (!retried) {
+        throw error;
+      }
+      propagateToMemory(inMemoryAccount, retried);
+      return retried;
+    } catch (retryError) {
+      if (retryError instanceof AntigravityTokenRefreshError) {
+        log.debug("quota-refresh-retry-failed", {
+          index,
+          email: account.email,
+          code: retryError.code,
+        });
+      }
+      throw retryError;
+    }
+  }
 }
 
 function normalizeRemainingFraction(value: unknown): number | undefined {
@@ -251,18 +484,29 @@ function aggregateGeminiCliQuota(response: RetrieveUserQuotaResponse): GeminiCli
   return { models };
 }
 
-function applyAccountUpdates(account: AccountMetadataV3, auth: OAuthAuthDetails): AccountMetadataV3 | undefined {
+function applyAccountUpdates(
+  account: AccountMetadataV3,
+  auth: OAuthAuthDetails,
+  routeState: CloudCodeRouteState | undefined,
+): AccountMetadataV3 | undefined {
   const parts = parseRefreshParts(auth.refresh);
   if (!parts.refreshToken) {
     return undefined;
   }
+
+  // isGcpTos zeroing guard: refreshAccessToken omits isGcpTos from its packed
+  // output, so `parts.isGcpTos` round-trips to `false` for EVERY rotated token,
+  // even GCP-ToS accounts. Never let that absent marker zero the stored flag.
+  // Prefer the server-reported route state, then the packed value, then the
+  // stored flag (?? preserves an explicitly-presented false).
+  const isGcpTos = routeState?.usesGcpTos ?? parts.isGcpTos ?? account.isGcpTos;
 
   const updated: AccountMetadataV3 = {
     ...account,
     refreshToken: parts.refreshToken,
     projectId: parts.projectId ?? account.projectId,
     managedProjectId: parts.managedProjectId ?? account.managedProjectId,
-    isGcpTos: parts.isGcpTos ?? account.isGcpTos,
+    isGcpTos,
   };
 
   const changed =
@@ -325,34 +569,41 @@ export async function checkAccountsQuota(
       continue;
     }
 
-    let auth = resolveCachedAuth(buildAuthFromAccount(account));
+    // Auth resolution priority: (1) freshest in-memory token from the
+    // AccountManager (the proactive refresh queue updates these in place after
+    // rotation, so they can hold a newer refresh token than the disk snapshot);
+    // (2) fall back to the existing disk-snapshot path only when no in-memory
+    // record matches. isGcpTos is resolved against any route state already
+    // discovered in this process so a stale/absent stored flag cannot select
+    // the wrong refresh OAuth client.
+    const inMemoryAccount = findInMemoryAccount(getActiveAccountManager(), account, index);
+    const knownRouteState = getKnownRouteState(
+      account.refreshToken,
+      inMemoryAccount?.parts.refreshToken,
+    );
+    let auth = resolveCachedAuth(buildFreshAuth(account, inMemoryAccount, knownRouteState));
 
     try {
       log.debug("quota-auth-state", {
         index,
         email: account.email,
+        fromInMemory: !!inMemoryAccount,
         hasAccess: !!auth.access,
         expires: auth.expires,
         accessExpired: accessTokenExpired(auth),
+        isGcpTos: parseRefreshParts(auth.refresh).isGcpTos,
+        usesGcpTos: knownRouteState?.usesGcpTos,
       });
-      if (accessTokenExpired(auth)) {
-        const refreshed = await refreshAccessToken(auth, client, providerId);
-        if (!refreshed) {
-          log.error("quota-refresh-returned-empty", {
-            index,
-            email: account.email,
-            hasCachedQuota: !!cachedQuota,
-            hasProjectId: !!account.projectId,
-            hasManagedProjectId: !!account.managedProjectId,
-          });
-          throw new Error("Access token refresh did not return a usable token. Check antigravity token logs for the exact failure.");
-        }
-        auth = refreshed;
-      }
+      auth = await refreshWithRetry(auth, account, index, client, providerId);
 
       const projectContext = await ensureProjectContext(auth);
       auth = projectContext.auth;
-      const updatedAccount = applyAccountUpdates(account, auth);
+      // Record the server-reported route state (keyed by both the stored token
+      // and the current post-rotation token) so later accounts and retries can
+      // derive isGcpTos from current state instead of a stale/absent flag.
+      recordRouteState(account.refreshToken, projectContext.routeState);
+      recordRouteState(parseRefreshParts(auth.refresh).refreshToken, projectContext.routeState);
+      const updatedAccount = applyAccountUpdates(account, auth, projectContext.routeState);
       log.debug("quota-project-context", {
         index,
         email: account.email,
