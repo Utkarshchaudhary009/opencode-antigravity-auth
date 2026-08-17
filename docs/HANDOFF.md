@@ -301,8 +301,8 @@ The plugin manages **two independent quota pools**:
 | Function | File:Line | What it fetches |
 |----------|-----------|-----------------|
 | `fetchAvailableModelsCatalog` | `model-catalog.ts:224-256` | Models + quotaInfo from `v1internal:fetchAvailableModels` |
-| `fetchGeminiCliQuota` | `quota.ts:436-470` | Buckets from `v1internal:retrieveUserQuota` |
-| `checkAccountsQuota` | `quota.ts:573-721` | Orchestrates both probes in `Promise.all` per account |
+| `fetchGeminiCliQuota` | `quota.ts (fetchGeminiCliQuota)` | Buckets from `v1internal:retrieveUserQuota` |
+| `checkAccountsQuota` | `quota.ts (checkAccountsQuota)` | Orchestrates both probes in `Promise.all` per account |
 | `triggerAsyncQuotaRefreshForAccount` | `plugin.ts:126-170` | Fire-and-forget post-success refresh, gated by interval |
 
 ### Rate-limit state machine
@@ -393,7 +393,7 @@ backoff ladder. Bounded by `maxCacheFirstWaitMs`.
 
 ### Change 3: Fail-open normalizeRemainingFraction
 
-**Problem:** `normalizeRemainingFraction` (quota.ts:342-350) mapped missing/NaN/negative
+**Problem:** `normalizeRemainingFraction` (quota.ts) mapped missing/NaN/negative
 to **0 (exhausted)**, causing false lockouts on the Gemini CLI path when quota data
 was missing or a fetch failed.
 

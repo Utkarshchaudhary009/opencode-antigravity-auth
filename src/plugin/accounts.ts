@@ -406,6 +406,7 @@ function getMinWaitForPool(
   model: string | null | undefined,
   graceMs: number,
 ): number | null {
+  // Claude is a single pool: headerStyle/model do not partition it.
   const keys: QuotaKey[] = family === "claude"
     ? ["claude"]
     : [getQuotaKey(family, headerStyle)];
