@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseRefreshParts } from "./auth";
 import { AccountManager, setActiveAccountManager } from "./accounts";
@@ -10,7 +10,7 @@ import { AntigravityTokenRefreshError, refreshAccessToken } from "./token";
 import type { AccountMetadataV3, AccountStorageV4 } from "./storage";
 import type { OAuthAuthDetails, PluginClient } from "./types";
 
-const { normalizeRemainingFraction, aggregateGeminiCliQuota } = __testExports;
+const { normalizeRemainingFraction, aggregateGeminiCliQuota, clearRouteState } = __testExports;
 
 const hoisted = vi.hoisted(() => {
   const log = {
@@ -154,6 +154,7 @@ describe("checkAccountsQuota auth resolution", () => {
     vi.resetAllMocks();
     setActiveAccountManager(null);
     clearCachedAuth();
+    __testExports.clearRouteState();
     vi.mocked(ensureProjectContext).mockImplementation(async (auth) => ({
       auth,
       effectiveProjectId: "project-123",
@@ -167,7 +168,11 @@ describe("checkAccountsQuota auth resolution", () => {
         },
       },
     });
-    global.fetch = vi.fn(async () => new Response(JSON.stringify({ buckets: [] }), { status: 200 })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ buckets: [] }), { status: 200 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("ROTATION RACE: uses the post-rotation in-memory token instead of the stale disk snapshot", async () => {
@@ -239,7 +244,6 @@ describe("checkAccountsQuota auth resolution", () => {
 
     expect(vi.mocked(refreshAccessToken).mock.calls).toHaveLength(2);
     expect(results[0]!.status).toBe("error");
-    expect(results[0]!.status).not.toBe("ok");
     // The real error is surfaced, not swallowed.
     expect(results[0]!.error).toContain("invalid_grant");
     // Fail-open cached quota may be attached, but only as an error-flagged result.
