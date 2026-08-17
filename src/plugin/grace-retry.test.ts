@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AccountManager } from "./accounts";
 import type { AccountStorageV4 } from "./storage";
@@ -59,6 +59,13 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     }
   }, 60_000);
 
+  // Teardown must run after EVERY test, even when an assertion throws mid-test.
+  // Leaving fake timers installed would poison later tests in this file.
+  afterEach(() => {
+    vi.useRealTimers();
+    resetRateLimitState?.(0, "gemini-antigravity");
+  });
+
   it("returns a small same-account delay when minWaitMs is inside the 2s optimistic window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -88,7 +95,6 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     // Beyond the 2s window -> no grace retry.
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 0, 30_000)).toBeNull();
 
-    vi.useRealTimers();
   });
 
   it("returns null when an account is already usable (minWaitMs === 0)", () => {
@@ -126,7 +132,6 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 0, 30_000)).toBeNull();
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 1500, 30_000)).toBeNull();
 
-    vi.useRealTimers();
   });
 
   it("restricts the fallback min-wait to the headerStyle that got 429'd (no cross-pool false eligibility)", () => {
@@ -157,7 +162,6 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     // Restricting to the gemini-cli pool: 1s wait -> eligible.
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 0, null, "gemini-cli")).toBe(1100);
 
-    vi.useRealTimers();
   });
 
   it("repeated 429s with small retry info eventually escalate instead of looping on the same account forever", () => {
@@ -204,8 +208,6 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     expect(third?.isDuplicate).toBe(false);
     expect(third?.attempt).toBe(2);
 
-    resetRateLimitState!(0, quotaKey);
-    vi.useRealTimers();
   });
 
   it("gates the same-account grace retry behind switch_on_first_rate_limit (finding: switch must win)", () => {
@@ -248,7 +250,6 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     // Sanity: a 1s current retry IS eligible and returns retry + grace.
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 0, 1000)).toBe(1000);
 
-    vi.useRealTimers();
   });
 
   it("restricts the no-retry-info fallback to the 429'd account (not another pool account's deadline)", () => {
@@ -288,6 +289,5 @@ describe("GraceRetry (optimistic same-account retry in 429 path)", () => {
     // The other account, taken alone, would legitimately be eligible.
     expect(getGraceRetryDelayMs!(manager, "gemini", undefined, 0, null, "antigravity", 1)).toBe(1100);
 
-    vi.useRealTimers();
   });
 });

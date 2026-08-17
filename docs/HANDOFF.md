@@ -301,8 +301,8 @@ The plugin manages **two independent quota pools**:
 | Function | File:Line | What it fetches |
 |----------|-----------|-----------------|
 | `fetchAvailableModelsCatalog` | `model-catalog.ts:224-256` | Models + quotaInfo from `v1internal:fetchAvailableModels` |
-| `fetchGeminiCliQuota` | `quota.ts:181-215` | Buckets from `v1internal:retrieveUserQuota` |
-| `checkAccountsQuota` | `quota.ts:293-434` | Orchestrates both probes in `Promise.all` per account |
+| `fetchGeminiCliQuota` | `quota.ts:436-470` | Buckets from `v1internal:retrieveUserQuota` |
+| `checkAccountsQuota` | `quota.ts:573-721` | Orchestrates both probes in `Promise.all` per account |
 | `triggerAsyncQuotaRefreshForAccount` | `plugin.ts:126-170` | Fire-and-forget post-success refresh, gated by interval |
 
 ### Rate-limit state machine
@@ -393,7 +393,7 @@ backoff ladder. Bounded by `maxCacheFirstWaitMs`.
 
 ### Change 3: Fail-open normalizeRemainingFraction
 
-**Problem:** `normalizeRemainingFraction` (quota.ts:86-94) mapped missing/NaN/negative
+**Problem:** `normalizeRemainingFraction` (quota.ts:342-350) mapped missing/NaN/negative
 to **0 (exhausted)**, causing false lockouts on the Gemini CLI path when quota data
 was missing or a fetch failed.
 
@@ -784,21 +784,17 @@ All options from `src/plugin/config/schema.ts` with defaults:
 
 ---
 
-## Appendix: Git Diff Summary (as of session end)
+## Appendix: Git Diff Summary (b214863..HEAD, PR #2)
 
 ```
- .gitignore                     |   4 ++
- AGENTS.md                      |   2 +
- docs/HANDOFF.md                |  36 +++++++--------
- src/plugin.ts                  |  58 +++++++++++++++--------
- src/plugin/accounts.test.ts    | 102 +++++++++++++++++++++++++++++++++++++++++
- src/plugin/accounts.ts         | 102 ++++++++++++++++++++++++++++++++++-------
- src/plugin/grace-retry.test.ts |  90 ++++++++++++++++++++++++++++++++++++
- src/tui.ts                     |   2 +-
- 8 files changed, 343 insertions(+), 53 deletions(-)
- + untracked: bun.lock, src/tui.test.ts
+ src/plugin/accounts.test.ts | 90 ++++++++++++++++++++++++++++++++++++++++++++-
+ src/plugin/accounts.ts      | 81 +++++++++++++++++++++++++++++-----------
+ src/plugin/quota.test.ts    | 64 ++++++++++++++++++++++++++++++++
+ src/plugin/quota.ts         | 77 +++++++++++++++++++++++++++-----------
+ src/plugin/token.ts         |  7 ++++
+ 5 files changed, 276 insertions(+), 43 deletions(-)
 ```
 
 **Test results:** 935 passed / 3 failed (pre-existing) / 3 skipped / 25 todo.
 **Build:** `tsc -p tsconfig.build.json` — dist/ regenerated.
-**Not committed.** Ready for `git add -A && git commit`.
+**Committed:** b214863..HEAD (git log).
