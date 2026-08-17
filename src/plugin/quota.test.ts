@@ -314,4 +314,68 @@ describe("checkAccountsQuota auth resolution", () => {
       current: true,
     });
   });
+
+  it("EMAIL-LESS FILTERED SUBSET: no index fallback — never reads another account's in-memory token", async () => {
+    // Manager holds TWO accounts; the check passes ONLY the second account
+    // (email-less) as a single-element array, so its array index is 0 while
+    // its manager index is 1. Index matching would wrongly return account 0
+    // (first@example.com) and refresh with THAT account's token.
+    const second: AccountMetadataV3 = {
+      email: undefined,
+      refreshToken: "second-stale-token",
+      projectId: "project-123",
+      addedAt: 1_700_000_000_000,
+      lastUsed: 0,
+    };
+    setActiveAccountManager(
+      makeManager([
+        baseAccount({ email: "first@example.com", refreshToken: "first-token" }),
+        { ...second, refreshToken: "second-rotated-token" },
+      ]),
+    );
+    vi.mocked(refreshAccessToken).mockResolvedValue(freshAuth("second-stale-token|project-123", "access-1"));
+
+    const results = await checkAccountsQuota([second], createClient());
+
+    // The refresh must use the disk snapshot token, NOT account 0's token.
+    const refreshArg = vi.mocked(refreshAccessToken).mock.calls[0]![0] as OAuthAuthDetails;
+    expect(parseRefreshParts(refreshArg.refresh).refreshToken).toBe("second-stale-token");
+    expect(results[0]!.status).toBe("ok");
+  });
+
+  it("GCP-TOS RACE: zeroed in-memory false does not override a stored true when no route state is known", async () => {
+    // Disk snapshot says isGcpTos: true; the in-memory record was rotated by a
+    // pre-fix refresh that dropped the flag, leaving parts.isGcpTos = false.
+    const stored = baseAccount({ email: "gcp@example.com", refreshToken: "gcp-stale", isGcpTos: true });
+    setActiveAccountManager(
+      makeManager([{ ...stored, refreshToken: "gcp-rotated", isGcpTos: false }]),
+    );
+    // No route state recorded for these tokens yet.
+    vi.mocked(refreshAccessToken).mockResolvedValue(freshAuth("gcp-rotated|project-123", "access-1"));
+
+    const results = await checkAccountsQuota([stored], createClient());
+
+    const refreshArg = vi.mocked(refreshAccessToken).mock.calls[0]![0] as OAuthAuthDetails;
+    expect(parseRefreshParts(refreshArg.refresh).isGcpTos).toBe(true);
+    expect(results[0]!.status).toBe("ok");
+  });
+
+  it("applyAccountUpdates: without route state, a stored true flag is preserved, not clobbered by a packed false", async () => {
+    const stored = baseAccount({ email: "gcp@example.com", refreshToken: "stale-token", isGcpTos: true });
+    setActiveAccountManager(makeManager([{ ...stored }]));
+    // managedProjectId fast path: ensureProjectContext reports no route state.
+    vi.mocked(ensureProjectContext).mockImplementation(async (auth) => ({
+      auth,
+      effectiveProjectId: "project-123",
+      routeState: { usesGcpTos: undefined },
+    }));
+    // Rotated auth packed WITHOUT the flag (simulates a legacy rotation).
+    vi.mocked(refreshAccessToken).mockResolvedValue(freshAuth("rotated-token|project-123", "access-1"));
+
+    const results = await checkAccountsQuota([stored], createClient());
+
+    expect(results[0]!.status).toBe("ok");
+    expect(results[0]!.updatedAccount?.refreshToken).toBe("rotated-token");
+    expect(results[0]!.updatedAccount?.isGcpTos).toBe(true);
+  });
 });

@@ -199,6 +199,13 @@ export async function refreshAccessToken(
       refreshToken: payload.refresh_token ?? parts.refreshToken,
       projectId: parts.projectId,
       managedProjectId: parts.managedProjectId,
+      // Carry the GCP-ToS flag through rotation. Dropping it packs an "absent"
+      // flag that parseRefreshParts reads back as `false`; updateFromAuth then
+      // writes that `false` into the in-memory record, clobbering a stored
+      // `true` and selecting the standard (non-GCP-ToS) OAuth client on the
+      // next refresh -> invalid_grant. The subprocess fallback below already
+      // preserves it (refreshAccessTokenViaSubprocess line: isGcpTos: parts.isGcpTos).
+      isGcpTos: parts.isGcpTos,
     };
 
     const updatedAuth: OAuthAuthDetails = {

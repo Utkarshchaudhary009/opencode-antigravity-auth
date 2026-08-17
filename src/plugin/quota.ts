@@ -150,17 +150,38 @@ function resolveRefreshIsGcpTos(stored: boolean | undefined, routeState: CloudCo
 }
 
 /**
+ * Resolve the stored isGcpTos signal when an in-memory record and a disk
+ * snapshot disagree. A `false` in-memory flag is ambiguous: the packed
+ * refresh format cannot distinguish "explicitly false" from "flag never
+ * packed", and rotations (before refreshAccessToken carried the flag through
+ * its packed output) left zeroed in-memory records whose disk flag still
+ * correctly says `true`. Prefer an explicit `true` on disk over a `false`
+ * in-memory flag; otherwise the in-memory value wins (it reflects newer
+ * state). Server-reported route state still overrides everything, applied
+ * downstream in `resolveRefreshIsGcpTos`.
+ */
+function resolveStoredIsGcpTos(inMemory: boolean | undefined, disk: boolean | undefined): boolean | undefined {
+  if (inMemory === false && disk === true) {
+    return true;
+  }
+  return inMemory ?? disk;
+}
+
+/**
  * Locate the AccountManager's in-memory record for a quota-check account.
  * The in-memory record can hold a newer (rotated) refresh token than the
  * passed account metadata. Matching priority: refresh token, then email.
- * The storage-position fallback is used ONLY when the snapshot has no email:
- * `index` here is the position in the (possibly filtered) account array, not
- * the manager's absolute index, so it can mis-match filtered subsets.
+ * When the snapshot has no email AND its token no longer matches (Google
+ * rotates refresh tokens), the account cannot be identified reliably: the
+ * caller's `index` is a position in a possibly-FILTERED account array
+ * (plugin.ts:159 passes a single-account subset), NOT the manager's absolute
+ * index, so an index fallback can resolve a DIFFERENT account's in-memory
+ * token and refresh with the wrong account's credentials. Return null so the
+ * caller falls back to the disk-snapshot path instead.
  */
 function findInMemoryAccount(
   manager: AccountManager | null,
   account: AccountMetadataV3,
-  index: number,
 ): ManagedAccount | null {
   if (!manager) {
     return null;
@@ -173,8 +194,7 @@ function findInMemoryAccount(
   if (account.email) {
     return accounts.find((acc) => acc.email === account.email) ?? null;
   }
-  // Email absent on the snapshot: fall back to storage position as a last resort.
-  return accounts.find((acc) => acc.index === index) ?? null;
+  return null;
 }
 
 /**
@@ -194,12 +214,13 @@ function buildFreshAuth(
       type: "oauth",
       refresh: formatRefreshParts({
         ...inMemoryAccount.parts,
-        // Fall back to the disk snapshot's flag when the in-memory flag is not
-        // explicitly set (e.g. the record was loaded before the flag existed,
-        // or updateFromAuth zeroed it: refreshAccessToken drops isGcpTos from
-        // its packed output, so `parts.isGcpTos` round-trips to `false`).
+        // Prefer the disk snapshot's explicit `true` over an in-memory `false`
+        // that may have been zeroed by a rotation (refreshAccessToken used to
+        // drop isGcpTos from its packed output, so `parts.isGcpTos` round-trips
+        // to `false`). Server-reported route state, when known, still wins —
+        // see resolveRefreshIsGcpTos.
         isGcpTos: resolveRefreshIsGcpTos(
-          inMemoryAccount.parts.isGcpTos ?? account.isGcpTos ?? undefined,
+          resolveStoredIsGcpTos(inMemoryAccount.parts.isGcpTos, account.isGcpTos),
           routeState,
         ),
       }),
@@ -246,7 +267,7 @@ async function refreshWithRetry(
   }
 
   const manager = getActiveAccountManager();
-  const initialInMemoryAccount = findInMemoryAccount(manager, account, index);
+  const initialInMemoryAccount = findInMemoryAccount(manager, account);
 
   // Keep the in-memory record in sync with the freshest rotated token. Without
   // this, the next check would match the stale in-memory record (by email) and
@@ -286,7 +307,7 @@ async function refreshWithRetry(
     // Re-resolve against the CURRENT in-memory state: the background refresh
     // queue may have completed a rotation since we first built auth, and the
     // server-reported route state may now be known (client-id selection).
-    const inMemoryAccount = findInMemoryAccount(manager, account, index);
+    const inMemoryAccount = findInMemoryAccount(manager, account);
     const routeState = getKnownRouteState(
       account.refreshToken,
       inMemoryAccount?.parts.refreshToken,
@@ -494,12 +515,23 @@ function applyAccountUpdates(
     return undefined;
   }
 
-  // isGcpTos zeroing guard: refreshAccessToken omits isGcpTos from its packed
-  // output, so `parts.isGcpTos` round-trips to `false` for EVERY rotated token,
-  // even GCP-ToS accounts. Never let that absent marker zero the stored flag.
-  // Prefer the server-reported route state, then the packed value, then the
-  // stored flag (?? preserves an explicitly-presented false).
-  const isGcpTos = routeState?.usesGcpTos ?? parts.isGcpTos ?? account.isGcpTos;
+  // isGcpTos preservation: never persist `false` when the real value is
+  // unknown. The managedProjectId fast path in ensureProjectContext reports no
+  // route state (usesGcpTos: undefined), and an absent packed flag parses back
+  // as `false`, so a naive `??` chain would clobber a stored `true` on disk
+  // (and later pick the wrong refresh client). Trusted signals, in order:
+  // server-reported route state (authoritative), an explicitly packed `true`,
+  // then the stored flag (kept untouched). With no signal at all, leave the
+  // flag undefined rather than persisting a guessed `false`.
+  let isGcpTos: boolean | undefined;
+  const routeFlag = routeState?.usesGcpTos;
+  if (routeFlag !== undefined) {
+    isGcpTos = routeFlag;
+  } else if (parts.isGcpTos === true) {
+    isGcpTos = true;
+  } else if (account.isGcpTos !== undefined) {
+    isGcpTos = account.isGcpTos;
+  }
 
   const updated: AccountMetadataV3 = {
     ...account,
@@ -509,10 +541,13 @@ function applyAccountUpdates(
     isGcpTos,
   };
 
+  // Include isGcpTos in the comparison so a merely re-resolved/preserved flag
+  // does not mark the record as changed and trigger a spurious disk write.
   const changed =
     updated.refreshToken !== account.refreshToken ||
     updated.projectId !== account.projectId ||
-    updated.managedProjectId !== account.managedProjectId;
+    updated.managedProjectId !== account.managedProjectId ||
+    updated.isGcpTos !== account.isGcpTos;
 
   return changed ? updated : undefined;
 }
@@ -576,7 +611,7 @@ export async function checkAccountsQuota(
     // record matches. isGcpTos is resolved against any route state already
     // discovered in this process so a stale/absent stored flag cannot select
     // the wrong refresh OAuth client.
-    const inMemoryAccount = findInMemoryAccount(getActiveAccountManager(), account, index);
+    const inMemoryAccount = findInMemoryAccount(getActiveAccountManager(), account);
     const knownRouteState = getKnownRouteState(
       account.refreshToken,
       inMemoryAccount?.parts.refreshToken,
