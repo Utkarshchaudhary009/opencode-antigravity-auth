@@ -396,6 +396,108 @@ describe("AccountManager", () => {
       expect(manager.getAvailableHeaderStyle(account!, "gemini")).toBe("antigravity");
     });
 
+    it("keeps a pool rate-limited inside the grace window in all public selection checks", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(0));
+
+      // Two identical pools: one asserted with the grace margin, one without.
+      // clearExpiredRateLimits mutates state (deletes expired entries), so the
+      // grace=0 assertions would poison the grace-window ones on a shared pool.
+      const makeManager = () => {
+        const stored: AccountStorageV4 = {
+          version: 4,
+          accounts: [
+            { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          ],
+          activeIndex: 0,
+        };
+        const manager = new AccountManager(undefined, stored);
+        const account = manager.getCurrentOrNextForFamily("gemini")!;
+        // Resets land at 5000ms (time is still 0 here). Both header styles are
+        // marked so getAvailableHeaderStyle has no free pool to fall back to.
+        manager.markRateLimited(account, 5000, "gemini", "antigravity");
+        manager.markRateLimited(account, 5000, "gemini", "gemini-cli");
+        return manager;
+      };
+
+      const withGrace = makeManager();
+      const withoutGrace = makeManager();
+
+      vi.setSystemTime(new Date(5500));
+
+      // The reset has passed but the grace margin (1000ms) has not: the pool
+      // must NOT be retried mid-grace-window by any selection helper.
+      const account = withGrace.getAccounts()[0]!;
+      expect(withGrace.isRateLimitedForHeaderStyle(account, "gemini", "antigravity", undefined, 1000)).toBe(true);
+      expect(withGrace.getAvailableHeaderStyle(account, "gemini", undefined, 1000)).toBeNull();
+
+      // Without grace the reset has already passed -> pool usable.
+      const accountNoGrace = withoutGrace.getAccounts()[0]!;
+      expect(withoutGrace.isRateLimitedForHeaderStyle(accountNoGrace, "gemini", "antigravity", undefined, 0)).toBe(false);
+      expect(withoutGrace.getAvailableHeaderStyle(accountNoGrace, "gemini", undefined, 0)).toBe("antigravity");
+
+      vi.useRealTimers();
+    });
+
+    it("areAllAccountsRateLimitedForReason respects the grace window", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(0));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 2, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      const accounts = manager.getAccounts();
+
+      manager.markRateLimited(accounts[0]!, 5000, "gemini", "antigravity");
+      manager.markRateLimited(accounts[1]!, 5000, "gemini", "antigravity");
+
+      vi.setSystemTime(new Date(5500));
+
+      // Within the grace window both accounts are still limited.
+      expect(manager.areAllAccountsRateLimitedForReason("gemini", "antigravity", "UNKNOWN", undefined, 1000)).toBe(true);
+      // Without grace the reset has passed -> not all rate-limited anymore.
+      expect(manager.areAllAccountsRateLimitedForReason("gemini", "antigravity", "UNKNOWN", undefined, 0)).toBe(false);
+
+      vi.useRealTimers();
+    });
+
+    it("hasOtherAccountWithAntigravityAvailable respects the grace window", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(0));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 2, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      const accounts = manager.getAccounts();
+
+      // Account 0 is the 429'd one; account 1's antigravity reset lands at 5000ms.
+      manager.markRateLimited(accounts[0]!, 60000, "gemini", "antigravity");
+      manager.markRateLimited(accounts[1]!, 5000, "gemini", "antigravity");
+
+      vi.setSystemTime(new Date(5500));
+
+      // Account 1 is still mid-grace-window for antigravity -> no switchable account.
+      expect(manager.hasOtherAccountWithAntigravityAvailable(accounts[0]!.index, "gemini", null, 1000)).toBe(false);
+      // Without grace, account 1's reset has passed -> switchable.
+      expect(manager.hasOtherAccountWithAntigravityAvailable(accounts[0]!.index, "gemini", null, 0)).toBe(true);
+
+      vi.useRealTimers();
+    });
+
     it("getMinWaitTimeForFamily considers both Gemini header styles", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(0));

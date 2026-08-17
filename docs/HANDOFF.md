@@ -344,7 +344,7 @@ retries. Dedup window: 2s (`RATE_LIMIT_DEDUP_WINDOW_MS`). State resets after 120
 ## 7. Changes Implemented This Session
 
 All changes are in the working tree (uncommitted). 8 modified tracked files +
-1 untracked test file. Tests: 935+ passed (3 pre-existing environmental failures
+2 untracked files (`bun.lock`, `src/tui.test.ts`). Tests: 935+ passed (3 pre-existing environmental failures
 in token.test.ts x2, version.test.ts x1). dist/ rebuilt.
 
 ### Change 1: Grace-to-deadline margin
@@ -368,9 +368,10 @@ An account is only considered usable once `now` passes `resetTime + graceMs`.
 
 ### Change 2: GraceRetry (dead code activated)
 
-**Problem:** `shouldTryOptimisticReset` existed (accounts.ts:733-736) but had
-**no caller** in production — only tests. The live 429 path used a 1s first-retry
-delay regardless of how close the account was to recovering.
+**Problem:** `shouldTryOptimisticReset` existed (accounts.ts:820-823) but had
+**no caller** in production — only tests (kept as a test-only helper). The live
+429 path used a 1s first-retry delay regardless of how close the account was to
+recovering.
 
 **Solution:** New helper `isOptimisticResetEligible(minWaitMs)` (accounts.ts ~L126)
 and `getGraceRetryDelayMs(accountManager, family, model, graceMs, currentRetryMs?,
@@ -634,7 +635,7 @@ Config-file overrides use a subset: `name`, `options`, `variants`, `contextWindo
 | Missing data | normalizeRemainingFraction missing -> **undefined** (fixed this session) | Models lacking quotaInfo **dropped entirely** |
 | Rate-limit state | In-memory + JSON file, **no real lock**, debounced saves | In-memory DashMap + DB, circuit breaker, 3600s expiry |
 | Rotation | Health scores (70, +1/-10/-20) + LRU hybrid + stickiness + **token buckets (50, 6/min)** | **P2C: pick 2 random from top-5**; capability -> tier -> quota sorting |
-| TLS fingerprint | **UA spoofing only** (no TLS) | rquest **Chrome123 JA3 emulation** on egress; pure TLS for quota/OAuth |
+| TLS fingerprint | **UA spoofing only** (no TLS) | request **Chrome123 JA3 emulation** on egress; pure TLS for quota/OAuth |
 | 429 grace | **+1500ms grace-to-deadline** (implemented this session) + **GraceRetry <=2s** | **+1500ms grace + GraceRetry <=2s** + in-place retry |
 | Presentation | In-TUI slash-command dialog (`/ag-accounts`) | Standalone desktop app + **API proxy** (OpenAI/Anthropic/Gemini formats) |
 | Scope | Works inside OpenCode agent TUI | Works with **any client** (Claude Code, SDKs, etc.) |
@@ -743,8 +744,8 @@ All options from `src/plugin/config/schema.ts` with defaults:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `token_bucket.max_tokens` | number | 50 | Bucket capacity |
-| `token_bucket.regen` | number | 6 | Tokens regenerated per minute |
-| `token_bucket.initial` | number | 50 | Initial token count |
+| `token_bucket.regeneration_rate_per_minute` | number | 6 | Tokens regenerated per minute |
+| `token_bucket.initial_tokens` | number | 50 | Initial token count |
 
 ### Quota
 | Option | Type | Default | Description |
@@ -752,7 +753,6 @@ All options from `src/plugin/config/schema.ts` with defaults:
 | `soft_quota_threshold_percent` | number | 90 | Preemptive switching threshold (1-100) |
 | `quota_refresh_interval_minutes` | number | 15 | Background refresh interval (0=disabled) |
 | `soft_quota_cache_ttl_minutes` | "auto" \| number | "auto" | Cache TTL; "auto" = max(2x interval, 10) |
-| `quota_summary_enabled` | boolean | true | Enable weekly quota summary fetch (pending implementation) |
 | `quota_fallback` | boolean | false | **Deprecated/ignored** |
 | `cli_first` | boolean | false | Prefer Gemini CLI pool routing |
 
@@ -787,16 +787,16 @@ All options from `src/plugin/config/schema.ts` with defaults:
 ## Appendix: Git Diff Summary (as of session end)
 
 ```
- script/build-schema.ts      |   2 +
- src/plugin.ts               |  25+ lines (graceMs wiring, GraceRetry path)
- src/plugin/accounts.ts      | 108+ lines (grace plumbing, isOptimisticResetEligible,
-                              |  getGraceRetryDelayMs, graceMs threading)
- src/plugin/accounts.test.ts |  65+ lines (grace-related tests)
- src/plugin/config/schema.ts |  12+ lines (grace_to_deadline_ms option)
- src/plugin/debug.ts         |   6+ lines (undefined quota handling)
- src/plugin/quota.ts         |  28+ lines (fail-open normalizeRemainingFraction)
- src/tui.ts                  |   2+ lines (n/a rendering)
- + untracked: src/plugin/grace-retry.test.ts (4 tests, 80 lines)
+ .gitignore                     |   4 ++
+ AGENTS.md                      |   2 +
+ docs/HANDOFF.md                |  36 +++++++--------
+ src/plugin.ts                  |  58 +++++++++++++++--------
+ src/plugin/accounts.test.ts    | 102 +++++++++++++++++++++++++++++++++++++++++
+ src/plugin/accounts.ts         | 102 ++++++++++++++++++++++++++++++++++-------
+ src/plugin/grace-retry.test.ts |  90 ++++++++++++++++++++++++++++++++++++
+ src/tui.ts                     |   2 +-
+ 8 files changed, 343 insertions(+), 53 deletions(-)
+ + untracked: bun.lock, src/tui.test.ts
 ```
 
 **Test results:** 935 passed / 3 failed (pre-existing) / 3 skipped / 25 todo.

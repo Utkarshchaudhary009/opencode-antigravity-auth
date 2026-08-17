@@ -161,6 +161,11 @@ export function isOptimisticResetEligible(minWaitMs: number | null | undefined):
  * over BOTH pools (antigravity + gemini-cli), so a short reset in the other
  * pool could make an antigravity failure look optimistically recoverable.
  *
+ * `accountIndex` further restricts the state-based fallback to the account that
+ * actually got 429'd: the pool-wide min-wait can pick up ANOTHER same-pool
+ * account's short reset deadline and make the 429'd account look
+ * optimistically recoverable, retrying it while its own reset is far away.
+ *
  * @returns delay in ms to sleep before retrying the same account, or null to
  *          fall through to the normal rate-limit ladder.
  */
@@ -171,8 +176,9 @@ export function getGraceRetryDelayMs(
   graceMs: number,
   currentRetryMs?: number | null,
   headerStyle?: HeaderStyle,
+  accountIndex?: number,
 ): number | null {
-  if (currentRetryMs && currentRetryMs > 0) {
+  if (currentRetryMs !== null && currentRetryMs !== undefined) {
     // Eligibility = raw server retry time within the 2s optimistic window
     // (no grace margin); the returned delay = retry + grace margin.
     if (!isOptimisticResetEligible(currentRetryMs)) {
@@ -181,13 +187,25 @@ export function getGraceRetryDelayMs(
     return currentRetryMs + graceMs;
   }
   let minWaitMs: number;
-  if (headerStyle) {
+  if (accountIndex !== undefined) {
+    minWaitMs = accountManager.getMinWaitTimeForAccount(accountIndex, family, model, headerStyle, graceMs);
+  } else if (headerStyle) {
     minWaitMs = accountManager.getMinWaitTimeForFamily(family, model, headerStyle, true, graceMs);
   } else {
     minWaitMs = accountManager.getMinWaitTimeForFamily(family, model, undefined, false, graceMs);
   }
-  return isOptimisticResetEligible(minWaitMs) ? minWaitMs + 100 : null;
+  return isOptimisticResetEligible(minWaitMs) ? minWaitMs + GRACE_RETRY_STATE_BUFFER_MS : null;
 }
+
+/**
+ * Extra buffer applied on top of the STATE-BASED min-wait in
+ * `getGraceRetryDelayMs`. The state-based min-wait already includes the
+ * configured grace margin (`getMinWaitTimeForFamily`/`getMinWaitTimeForAccount`
+ * compute `resetTime + graceMs - now`), so re-adding `graceMs` here would
+ * double-apply the margin. The fixed 100ms is a small buffer so the retry
+ * lands just past the grace-marked deadline instead of exactly on it.
+ */
+const GRACE_RETRY_STATE_BUFFER_MS = 100;
 
 export type BaseQuotaKey = "claude" | "gemini-antigravity" | "gemini-cli";
 export type QuotaKey = BaseQuotaKey | `${BaseQuotaKey}:${string}`;
@@ -298,6 +316,13 @@ function isRateLimitedForHeaderStyle(account: ManagedAccount, family: ModelFamil
   return isRateLimitedForQuotaKey(account, baseKey, graceMs);
 }
 
+/**
+ * Purges rate-limit entries whose reset time (plus grace margin) has passed.
+ *
+ * IMPORTANT: `graceMs` must be consistent across all calls within a single
+ * request cycle. Calling with graceMs=0 while the hot path uses graceMs=1500
+ * would prematurely delete entries that should still be considered active.
+ */
 function clearExpiredRateLimits(account: ManagedAccount, graceMs = 0): void {
   const now = nowMs();
   const keys = Object.keys(account.rateLimitResetTimes) as QuotaKey[];
@@ -857,20 +882,26 @@ export class AccountManager {
     account: ManagedAccount,
     family: ModelFamily,
     headerStyle: HeaderStyle,
-    model?: string | null
+    model?: string | null,
+    graceMs: number = 0,
   ): boolean {
-    return isRateLimitedForHeaderStyle(account, family, headerStyle, model);
+    return isRateLimitedForHeaderStyle(account, family, headerStyle, model, graceMs);
   }
 
-  getAvailableHeaderStyle(account: ManagedAccount, family: ModelFamily, model?: string | null): HeaderStyle | null {
-    clearExpiredRateLimits(account);
+  getAvailableHeaderStyle(
+    account: ManagedAccount,
+    family: ModelFamily,
+    model?: string | null,
+    graceMs: number = 0,
+  ): HeaderStyle | null {
+    clearExpiredRateLimits(account, graceMs);
     if (family === "claude") {
-      return isRateLimitedForHeaderStyle(account, family, "antigravity") ? null : "antigravity";
+      return isRateLimitedForHeaderStyle(account, family, "antigravity", undefined, graceMs) ? null : "antigravity";
     }
-    if (!isRateLimitedForHeaderStyle(account, family, "antigravity", model)) {
+    if (!isRateLimitedForHeaderStyle(account, family, "antigravity", model, graceMs)) {
       return "antigravity";
     }
-    if (!isRateLimitedForHeaderStyle(account, family, "gemini-cli", model)) {
+    if (!isRateLimitedForHeaderStyle(account, family, "gemini-cli", model, graceMs)) {
       return "gemini-cli";
     }
     return null;
@@ -881,8 +912,9 @@ export class AccountManager {
     family: ModelFamily,
     headerStyle: HeaderStyle,
     model?: string | null,
+    graceMs: number = 0,
   ): RateLimitReason | undefined {
-    clearExpiredRateLimits(account);
+    clearExpiredRateLimits(account, graceMs);
     return getRateLimitReasonForHeaderStyle(account, family, headerStyle, model);
   }
 
@@ -891,6 +923,7 @@ export class AccountManager {
     headerStyle: HeaderStyle,
     reason: RateLimitReason,
     model?: string | null,
+    graceMs: number = 0,
   ): boolean {
     let hasEligibleAccount = false;
 
@@ -900,9 +933,9 @@ export class AccountManager {
       }
 
       hasEligibleAccount = true;
-      clearExpiredRateLimits(account);
+      clearExpiredRateLimits(account, graceMs);
 
-      if (!isRateLimitedForHeaderStyle(account, family, headerStyle, model)) {
+      if (!isRateLimitedForHeaderStyle(account, family, headerStyle, model, graceMs)) {
         return false;
       }
 
@@ -929,7 +962,8 @@ export class AccountManager {
   hasOtherAccountWithAntigravityAvailable(
     currentAccountIndex: number,
     family: ModelFamily,
-    model?: string | null
+    model?: string | null,
+    graceMs: number = 0,
   ): boolean {
     // Claude has no gemini-cli fallback - always return false
     // (This method is only relevant for Gemini's dual quota pools)
@@ -951,9 +985,9 @@ export class AccountManager {
         return false;
       }
       // Clear expired rate limits before checking
-      clearExpiredRateLimits(acc);
+      clearExpiredRateLimits(acc, graceMs);
       // Check if antigravity is available for this account
-      return !isRateLimitedForHeaderStyle(acc, family, "antigravity", model);
+      return !isRateLimitedForHeaderStyle(acc, family, "antigravity", model, graceMs);
     });
   }
 
@@ -1094,6 +1128,49 @@ export class AccountManager {
       access: account.access,
       expires: account.expires,
     };
+  }
+
+  getMinWaitTimeForAccount(
+    accountIndex: number,
+    family: ModelFamily,
+    model?: string | null,
+    headerStyle?: HeaderStyle,
+    graceMs: number = 0,
+  ): number {
+    const account = this.accounts.find(a => a.index === accountIndex);
+    if (!account) return 0;
+    clearExpiredRateLimits(account, graceMs);
+
+    // Account is currently usable for this family/pool -> no wait.
+    const usable = headerStyle
+      ? !isRateLimitedForHeaderStyle(account, family, headerStyle, model, graceMs)
+      : !isRateLimitedForFamily(account, family, model, graceMs);
+    if (usable) return 0;
+
+    const waitTimes: number[] = [];
+    if (family === "claude") {
+      const t = account.rateLimitResetTimes.claude;
+      if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
+    } else if (headerStyle) {
+      const key = getQuotaKey(family, headerStyle, model);
+      const t = account.rateLimitResetTimes[key];
+      if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
+    } else {
+      // For Gemini, the account becomes available when EITHER pool expires for this model/family
+      const antigravityKey = getQuotaKey(family, "antigravity", model);
+      const cliKey = getQuotaKey(family, "gemini-cli", model);
+
+      const t1 = account.rateLimitResetTimes[antigravityKey];
+      const t2 = account.rateLimitResetTimes[cliKey];
+
+      const accountWait = Math.min(
+        t1 !== undefined ? Math.max(0, t1 + graceMs - nowMs()) : Infinity,
+        t2 !== undefined ? Math.max(0, t2 + graceMs - nowMs()) : Infinity
+      );
+      if (accountWait !== Infinity) waitTimes.push(accountWait);
+    }
+
+    return waitTimes.length > 0 ? Math.min(...waitTimes) : 0;
   }
 
   getMinWaitTimeForFamily(

@@ -138,6 +138,8 @@ There are two config layers — do not confuse them:
 
 - The plugin reads runtime metadata from the locally installed Antigravity app first, then falls back to static values. Do not remove fallback paths.
 - Bridge mode uses the installed Antigravity language server binaries. This is intentional — it matches IDE behavior more closely than direct request emulation.
+- `reference/antigravity-proxy-tools` is a local clone of the upstream repo `ethan-w20/antigravity-proxy-tools`. It is kept as a reference for proxy/bridge behavior — consult it before reimplementing proxy logic.
+- The reference folder is excluded from builds and tests via `.gitignore` and is not part of the shipped plugin.
 - Multi-account rotation uses health scores, LRU hybrid selection, and token buckets. Changes to rotation logic should be tested against the scenarios in `docs/HANDOFF.md` section 12.
 - The package name `opencode-antigravity-auth` is referenced throughout source code (plugin IDs, config writers, auto-updater). Do not rename it without updating all internal references.
 

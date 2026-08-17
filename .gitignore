@@ -49,6 +49,10 @@ test-file.ts
 src/**/*.test.ts
 !src/plugin/grace-retry.test.ts
 !src/plugin/quota.test.ts
+!src/tui.test.ts
 src/**/*.test.tsx
 src/**/*.spec.ts
 src/**/*.spec.tsx
+
+# reference clone of upstream proxy tools (contains its own nested .git)
+reference/

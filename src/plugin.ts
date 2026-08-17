@@ -950,10 +950,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
           };
           
-          const hasOtherAccountWithAntigravity = (currentAccount: ManagedAccount): boolean => {
+          const hasOtherAccountWithAntigravity = (currentAccount: ManagedAccount, graceMs: number): boolean => {
             if (family !== "gemini") return false;
             // Use AccountManager method which properly checks for disabled/cooling-down accounts
-            return accountManager.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model);
+            return accountManager.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model, graceMs);
           };
 
           while (true) {
@@ -1327,8 +1327,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
             
             // Check if this header style is rate-limited for this account
-            if (accountManager.isRateLimitedForHeaderStyle(account, family, headerStyle, model)) {
-              const currentRateLimitReason = accountManager.getRateLimitReason(account, family, headerStyle, model);
+            if (accountManager.isRateLimitedForHeaderStyle(account, family, headerStyle, model, graceMs)) {
+              const currentRateLimitReason = accountManager.getRateLimitReason(account, family, headerStyle, model, graceMs);
               // Antigravity-first fallback: exhaust antigravity across ALL accounts before gemini-cli
               if (
                 allowQuotaFallback &&
@@ -1337,13 +1337,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 canFallbackAcrossGeminiQuota(currentRateLimitReason)
               ) {
                 // Check if ANY other account has antigravity available
-                if (accountManager.hasOtherAccountWithAntigravityAvailable(account.index, family, model)) {
+                if (accountManager.hasOtherAccountWithAntigravityAvailable(account.index, family, model, graceMs)) {
                   // Switch to another account with antigravity (preserve antigravity priority)
                   pushDebug(`antigravity rate-limited on account ${account.index}, but available on other accounts. Switching.`);
                   shouldSwitchAccount = true;
-                } else if (accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model)) {
+                } else if (accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model, graceMs)) {
                   // All accounts exhausted antigravity - fall back to gemini-cli on this account
-                  const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model);
+                  const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model, graceMs);
                   const fallbackStyle = resolveQuotaFallbackHeaderStyle({
                     family,
                     headerStyle,
@@ -1366,10 +1366,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 allowQuotaFallback &&
                 family === "gemini" &&
                 canFallbackAcrossGeminiQuota(currentRateLimitReason) &&
-                accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model)
+                accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model, graceMs)
               ) {
                 // gemini-cli rate-limited - try alternate style (antigravity) on same account
-                const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model);
+                const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model, graceMs);
                 const fallbackStyle = resolveQuotaFallbackHeaderStyle({
                   family,
                   headerStyle,
@@ -1496,8 +1496,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   const bodyInfo = await extractRetryInfoFromBody(response);
                   const serverRetryMs = bodyInfo.retryDelayMs ?? headerRetryMs ?? defaultRetryMs;
                   // Whether the CURRENT 429 actually carried server retry info
-                  // (Retry-After / retry-after-ms header, body retryDelay, or
-                  // quota reset). Only a real value should drive the current-429
+                  // (Retry-After / retry-after-ms header or body retryDelay).
+                  // A body quotaResetTime is only ever reported together with a
+                  // non-null retryDelayMs (extractRateLimitBodyInfo folds the
+                  // quota reset into retryDelayMs), so it needs no separate
+                  // check here. Only a real value should drive the current-429
                   // grace branch; when the 429 had NO retry info we must pass
                   // null so getGraceRetryDelayMs falls back to the strict
                   // headerStyle state-based min-wait instead of treating the 60s
@@ -1599,7 +1602,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     // 429'd headerStyle (strict mode) so a short reset in the
                     // OTHER pool can't create false eligibility.
                     const maxCacheFirstWaitMs = config.max_cache_first_wait_seconds * 1000;
-                    const graceRetryDelayMs = getGraceRetryDelayMs(accountManager, family, model, graceMs, hasRetryInfo ? serverRetryMs : null, headerStyle);
+                    const graceRetryDelayMs = getGraceRetryDelayMs(accountManager, family, model, graceMs, hasRetryInfo ? serverRetryMs : null, headerStyle, account.index);
+                    // GraceRetry is a same-account optimistic retry. It must NOT
+                    // preempt an account switch when switch_on_first_rate_limit is
+                    // enabled with a pool big enough to actually switch (the switch
+                    // check below wins). With a single account the switch is a
+                    // no-op, so the grace retry stays available there.
+                    const graceRetryEnabled = shouldUseGraceRetryOnFirstRateLimit(config.switch_on_first_rate_limit, accountCount);
                     // A duplicate backoff (isDuplicate) means a 429 for this
                     // account+quota already happened within the 2s dedup window.
                     // Because the grace delay is usually < 2s, the dedup would
@@ -1609,7 +1618,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     // for duplicates so they fall through to the normal
                     // rate-limit path; the first 429 (isDuplicate=false) still
                     // gets the optimistic grace retry.
-                    if (!isDuplicate && graceRetryDelayMs !== null && graceRetryDelayMs <= maxCacheFirstWaitMs) {
+                    if (graceRetryEnabled && !isDuplicate && graceRetryDelayMs !== null && graceRetryDelayMs <= maxCacheFirstWaitMs) {
                       pushDebug(`grace-retry: optimistic same-account retry family=${family} delayMs=${graceRetryDelayMs} graceMs=${graceMs}`);
                       await showToast(`Rate limited. Retrying same account in ~${Math.max(1, Math.round(graceRetryDelayMs / 1000))}s (grace margin)...`, "warning");
                       await sleep(graceRetryDelayMs, abortSignal);
@@ -1656,7 +1665,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (family === "gemini") {
                     if (headerStyle === "antigravity") {
                       // Check if any other account has Antigravity quota for this model
-                      if (hasOtherAccountWithAntigravity(account)) {
+                      if (hasOtherAccountWithAntigravity(account, graceMs)) {
                         pushDebug(`antigravity exhausted on account ${account.index}, but available on others. Switching account.`);
                         await showToast(`Rate limited again. Switching account in 5s...`, "warning");
                         await sleep(SWITCH_ACCOUNT_DELAY_MS, abortSignal);
@@ -1669,9 +1678,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       if (
                         allowQuotaFallback &&
                         canFallbackAcrossGeminiQuota(rateLimitReason) &&
-                        accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model)
+                        accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model, graceMs)
                       ) {
-                        const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model);
+                        const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model, graceMs);
                         const fallbackStyle = resolveQuotaFallbackHeaderStyle({
                           family,
                           headerStyle,
@@ -1692,9 +1701,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       if (
                         allowQuotaFallback &&
                         canFallbackAcrossGeminiQuota(rateLimitReason) &&
-                        accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model)
+                        accountManager.areAllAccountsRateLimitedForReason(family, headerStyle, "QUOTA_EXHAUSTED", model, graceMs)
                       ) {
-                        const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model);
+                        const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model, graceMs);
                         const fallbackStyle = resolveQuotaFallbackHeaderStyle({
                           family,
                           headerStyle,
@@ -2147,6 +2156,18 @@ function getCliFirst(config: AntigravityConfig): boolean {
   return (config as AntigravityConfig & { cli_first?: boolean }).cli_first ?? false;
 }
 
+/**
+ * Whether the optimistic same-account grace retry may run on a first 429.
+ *
+ * With `switch_on_first_rate_limit` enabled AND a pool large enough to
+ * actually switch (accountCount > 1), the account switch wins over a
+ * same-account retry. With a single account the switch is a no-op, so the
+ * grace retry stays available there.
+ */
+function shouldUseGraceRetryOnFirstRateLimit(switchOnFirstRateLimit: boolean, accountCount: number): boolean {
+  return !switchOnFirstRateLimit || accountCount <= 1;
+}
+
 function getHeaderStyleFromUrl(
   urlString: string,
   family: ModelFamily,
@@ -2179,5 +2200,6 @@ export const __testExports = {
   getGraceRetryDelayMs,
   getRateLimitBackoff,
   resetRateLimitState,
+  shouldUseGraceRetryOnFirstRateLimit,
 };
 

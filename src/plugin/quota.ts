@@ -1,7 +1,6 @@
 import {
   ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_PROVIDER_ID,
-  getAntigravityHeaders,
 } from "../constants";
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
 import { resolveCachedAuth } from "./cache";
@@ -24,7 +23,8 @@ const log = createLogger("quota");
 export type QuotaGroup = "claude" | "gemini-pro" | "gemini-flash";
 
 export interface QuotaGroupSummary {
-  remainingFraction?: number;
+  /** Remaining fraction clamped to [0, 1], or undefined when unknown (fail-open). */
+  remainingFraction: number | undefined;
   resetTime?: string;
   modelCount: number;
 }

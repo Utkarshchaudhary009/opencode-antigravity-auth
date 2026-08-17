@@ -118,7 +118,7 @@ function accountTitle(index: number, account: StoredAccount): string {
   return `${index + 1}. ${email}`;
 }
 
-function formatQuotaPercent(value?: number): string {
+export function formatQuotaPercent(value?: number): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "n/a";
   }
