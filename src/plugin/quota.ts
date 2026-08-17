@@ -173,11 +173,11 @@ function resolveStoredIsGcpTos(inMemory: boolean | undefined, disk: boolean | un
  * passed account metadata. Matching priority: refresh token, then email.
  * When the snapshot has no email AND its token no longer matches (Google
  * rotates refresh tokens), the account cannot be identified reliably: the
- * caller's `index` is a position in a possibly-FILTERED account array
- * (plugin.ts:159 passes a single-account subset), NOT the manager's absolute
- * index, so an index fallback can resolve a DIFFERENT account's in-memory
- * token and refresh with the wrong account's credentials. Return null so the
- * caller falls back to the disk-snapshot path instead.
+ * caller's `index` is a position in a possibly-FILTERED account array (the
+ * plugin.ts plugin:auth flow passes a single-account subset), NOT the manager's
+ * absolute index, so an index fallback can resolve a DIFFERENT account's
+ * in-memory token and refresh with the wrong account's credentials. Return null
+ * so the caller falls back to the disk-snapshot path instead.
  */
 function findInMemoryAccount(
   manager: AccountManager | null,
@@ -251,9 +251,10 @@ function buildFreshAuth(
  * behavior.
  *
  * Every successful refresh is propagated back into the AccountManager's
- * in-memory record (mirroring refresh-queue.ts:184 / plugin.ts:1144) so the
- * NEXT quota check resolves the rotated token in memory instead of re-refreshing
- * the already-rotated-away token on disk (which would 400 invalid_grant).
+ * in-memory record (mirroring the refresh queue / plugin.ts handleRefreshResult
+ * path) so the NEXT quota check resolves the rotated token in memory instead of
+ * re-refreshing the already-rotated-away token on disk (which would 400
+ * invalid_grant).
  */
 async function refreshWithRetry(
   auth: OAuthAuthDetails,
@@ -326,7 +327,7 @@ async function refreshWithRetry(
         // failure (with the first attempt's code as context) instead of
         // re-raising the original stale-token error, which would misattribute
         // the failure to the pre-rotation state.
-        const firstCode = error instanceof AntigravityTokenRefreshError ? error.code : undefined;
+        const firstCode = error.code;
         throw new Error(
           `Access token refresh retry did not return a usable token` +
           (firstCode ? ` (first attempt failed with ${firstCode})` : "") +
@@ -733,4 +734,5 @@ export async function checkAccountsQuota(
 export const __testExports = {
   normalizeRemainingFraction,
   aggregateGeminiCliQuota,
+  clearRouteState: () => routeStateByRefreshToken.clear(),
 };
