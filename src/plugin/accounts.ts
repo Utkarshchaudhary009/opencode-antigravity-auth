@@ -377,6 +377,41 @@ function getRateLimitReasonForHeaderStyle(
 }
 
 /**
+ * Earliest wait (ms) before the account becomes usable for a single
+ * (family, headerStyle) pool.
+ *
+ * The account is limited for the pool until BOTH the model-specific limit and
+ * the base (overall) limit have expired (`isRateLimitedForHeaderStyle` returns
+ * true when either is over threshold), so the wait is the LATER of the two
+ * resets. Returns null when no reset is recorded for this pool (not limited).
+ */
+function getMinWaitForPool(
+  account: ManagedAccount,
+  family: ModelFamily,
+  headerStyle: HeaderStyle,
+  model: string | null | undefined,
+  graceMs: number,
+): number | null {
+  const keys: QuotaKey[] = family === "claude"
+    ? ["claude"]
+    : [getQuotaKey(family, headerStyle)];
+  if (family !== "claude" && model) {
+    keys.push(getQuotaKey(family, headerStyle, model));
+  }
+
+  let waitMs = -Infinity;
+  let found = false;
+  for (const key of keys) {
+    const resetTime = account.rateLimitResetTimes[key];
+    if (resetTime !== undefined) {
+      found = true;
+      waitMs = Math.max(waitMs, resetTime + graceMs - nowMs());
+    }
+  }
+  return found ? Math.max(0, waitMs) : null;
+}
+
+/**
  * Resolve the quota group for soft quota checks.
  * 
  * When a model string is available, we can precisely determine the quota group.
@@ -468,7 +503,15 @@ export class AccountManager {
   static async loadFromDisk(authFallback?: OAuthAuthDetails): Promise<AccountManager> {
     const stored = await loadAccounts();
     const manager = new AccountManager(authFallback, stored);
-    setActiveAccountManager(manager);
+    // Registry resilience: keep the FIRST manager that becomes active. The main
+    // plugin's instance holds the freshest in-memory token state that quota.ts
+    // resolves through getActiveAccountManager(). Secondary loads of the same
+    // store file (e.g. the bridge headless-launch manager in bridge/auth.ts)
+    // must not clobber it, or quota checks would resolve tokens from the wrong
+    // manager instance.
+    if (getActiveAccountManager() === null) {
+      setActiveAccountManager(manager);
+    }
     return manager;
   }
 
@@ -1174,20 +1217,18 @@ export class AccountManager {
       const t = account.rateLimitResetTimes.claude;
       if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
     } else if (headerStyle) {
-      const key = getQuotaKey(family, headerStyle, model);
-      const t = account.rateLimitResetTimes[key];
-      if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
+      // Limited for this pool until BOTH the model-specific and base limits
+      // expire -> wait for the LATER reset.
+      const poolWait = getMinWaitForPool(account, family, headerStyle, model, graceMs);
+      if (poolWait !== null) waitTimes.push(poolWait);
     } else {
       // For Gemini, the account becomes available when EITHER pool expires for this model/family
-      const antigravityKey = getQuotaKey(family, "antigravity", model);
-      const cliKey = getQuotaKey(family, "gemini-cli", model);
-
-      const t1 = account.rateLimitResetTimes[antigravityKey];
-      const t2 = account.rateLimitResetTimes[cliKey];
+      const antigravityWait = getMinWaitForPool(account, family, "antigravity", model, graceMs);
+      const cliWait = getMinWaitForPool(account, family, "gemini-cli", model, graceMs);
 
       const accountWait = Math.min(
-        t1 !== undefined ? Math.max(0, t1 + graceMs - nowMs()) : Infinity,
-        t2 !== undefined ? Math.max(0, t2 + graceMs - nowMs()) : Infinity
+        antigravityWait !== null ? antigravityWait : Infinity,
+        cliWait !== null ? cliWait : Infinity
       );
       if (accountWait !== Infinity) waitTimes.push(accountWait);
     }
@@ -1218,20 +1259,18 @@ export class AccountManager {
         const t = a.rateLimitResetTimes.claude;
         if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
       } else if (strict && headerStyle) {
-        const key = getQuotaKey(family, headerStyle, model);
-        const t = a.rateLimitResetTimes[key];
-        if (t !== undefined) waitTimes.push(Math.max(0, t + graceMs - nowMs()));
+        // Limited for this pool until BOTH the model-specific and base limits
+        // expire -> wait for the LATER reset.
+        const poolWait = getMinWaitForPool(a, family, headerStyle, model, graceMs);
+        if (poolWait !== null) waitTimes.push(poolWait);
       } else {
         // For Gemini, account becomes available when EITHER pool expires for this model/family
-        const antigravityKey = getQuotaKey(family, "antigravity", model);
-        const cliKey = getQuotaKey(family, "gemini-cli", model);
+        const antigravityWait = getMinWaitForPool(a, family, "antigravity", model, graceMs);
+        const cliWait = getMinWaitForPool(a, family, "gemini-cli", model, graceMs);
 
-        const t1 = a.rateLimitResetTimes[antigravityKey];
-        const t2 = a.rateLimitResetTimes[cliKey];
-        
         const accountWait = Math.min(
-          t1 !== undefined ? Math.max(0, t1 + graceMs - nowMs()) : Infinity,
-          t2 !== undefined ? Math.max(0, t2 + graceMs - nowMs()) : Infinity
+          antigravityWait !== null ? antigravityWait : Infinity,
+          cliWait !== null ? cliWait : Infinity
         );
         if (accountWait !== Infinity) waitTimes.push(accountWait);
       }

@@ -1,12 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AccountManager, type ModelFamily, type HeaderStyle, parseRateLimitReason, calculateBackoffMs, type RateLimitReason, resolveQuotaGroup } from "./accounts";
+import { AccountManager, getActiveAccountManager, setActiveAccountManager, type ModelFamily, type HeaderStyle, parseRateLimitReason, calculateBackoffMs, type RateLimitReason, resolveQuotaGroup } from "./accounts";
 import type { AccountStorageV4 } from "./storage";
 import type { OAuthAuthDetails } from "./types";
+
+const storageMocks = vi.hoisted(() => ({
+  loadAccounts: vi.fn(),
+}));
+
+// Keep the real storage implementation but let tests control loadAccounts so
+// AccountManager.loadFromDisk (registry behavior) can be exercised in-memory.
+vi.mock("./storage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./storage")>();
+  return { ...actual, loadAccounts: storageMocks.loadAccounts };
+});
 
 describe("AccountManager", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    storageMocks.loadAccounts.mockReset();
   });
 
   it("treats on-disk storage as source of truth, even when empty", () => {
@@ -25,6 +37,30 @@ describe("AccountManager", () => {
 
     const manager = new AccountManager(fallback, stored);
     expect(manager.getAccountCount()).toBe(0);
+  });
+
+  it("loadFromDisk does not clobber an already-active manager for the same store", async () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    storageMocks.loadAccounts.mockResolvedValue(stored);
+
+    // Main plugin startup: the first loadFromDisk becomes the active manager.
+    const mainManager = await AccountManager.loadFromDisk();
+    expect(getActiveAccountManager()).toBe(mainManager);
+
+    // Secondary load of the same store (e.g. bridge headless-launch manager)
+    // returns its own instance but must NOT replace the active one, or quota
+    // checks would resolve tokens from the wrong manager.
+    const bridgeManager = await AccountManager.loadFromDisk();
+    expect(bridgeManager).not.toBe(mainManager);
+    expect(getActiveAccountManager()).toBe(mainManager);
+
+    setActiveAccountManager(null);
   });
 
   it("returns current account when not rate-limited for family", () => {
@@ -1266,6 +1302,58 @@ describe("AccountManager", () => {
       ).toBe(30000);
 
       expect(manager.getMinWaitTimeForFamily("gemini", "gemini-3-pro-image")).toBe(0);
+    });
+
+    it("getMinWaitTimeForAccount waits for the LATER of model-specific and base resets", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(0));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      const account = manager.getCurrentOrNextForFamily("gemini")!;
+
+      // Model-specific limit resets sooner (30s) than the base overall limit (60s).
+      manager.markRateLimited(account, 30000, "gemini", "antigravity", "gemini-3-pro");
+      manager.markRateLimited(account, 60000, "gemini", "antigravity");
+
+      // The account stays limited until BOTH limits expire, so the wait must be
+      // the base reset (60s), not the model reset (30s).
+      expect(manager.getMinWaitTimeForAccount(account.index, "gemini", "gemini-3-pro", "antigravity")).toBe(60000);
+
+      // Strict pool-wide wait behaves the same.
+      expect(manager.getMinWaitTimeForFamily("gemini", "gemini-3-pro", "antigravity", true)).toBe(60000);
+
+      vi.useRealTimers();
+    });
+
+    it("getMinWaitTimeForAccount falls back to the base reset when only the base limit is active", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(0));
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      const account = manager.getCurrentOrNextForFamily("gemini")!;
+
+      // Only the base limit is recorded; the model key has no reset entry.
+      manager.markRateLimited(account, 60000, "gemini", "antigravity");
+
+      expect(manager.getMinWaitTimeForAccount(account.index, "gemini", "gemini-3-pro", "antigravity")).toBe(60000);
+
+      vi.useRealTimers();
     });
 
     describe("parseRateLimitReason", () => {
