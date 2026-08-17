@@ -1,5 +1,5 @@
 import { formatRefreshParts, parseRefreshParts } from "./auth";
-import { loadAccounts, saveAccounts, type AccountStorageV4, type AccountMetadataV3, type RateLimitStateV3, type ModelFamily, type HeaderStyle, type CooldownReason } from "./storage";
+import { getStoragePath, loadAccounts, saveAccounts, type AccountStorageV4, type AccountMetadataV3, type RateLimitStateV3, type ModelFamily, type HeaderStyle, type CooldownReason } from "./storage";
 import type { OAuthAuthDetails, RefreshParts } from "./types";
 import type { AccountSelectionStrategy } from "./config/schema";
 import { getHealthTracker, getTokenTracker, selectHybridAccount, type AccountWithMetrics } from "./rotation";
@@ -29,16 +29,30 @@ export type RateLimitReason =
 // account file. The in-memory record is updated in place by proactive token
 // refresh (rotation), so it can hold a newer refresh token than the last
 // persisted disk snapshot.
+//
+// Entries are scoped by the resolved account-store path so the main plugin's
+// manager and bridge-launch managers for different store files can coexist
+// without clobbering each other — a single global slot would let the first
+// loader win for every store.
 // ============================================================================
 
-let activeAccountManager: AccountManager | null = null;
+const activeManagersByStorePath = new Map<string, AccountManager>();
 
-export function setActiveAccountManager(manager: AccountManager | null): void {
-  activeAccountManager = manager;
+export function setActiveAccountManager(
+  manager: AccountManager | null,
+  storePath: string = getStoragePath(),
+): void {
+  if (manager === null) {
+    activeManagersByStorePath.delete(storePath);
+  } else {
+    activeManagersByStorePath.set(storePath, manager);
+  }
 }
 
-export function getActiveAccountManager(): AccountManager | null {
-  return activeAccountManager;
+export function getActiveAccountManager(
+  storePath: string = getStoragePath(),
+): AccountManager | null {
+  return activeManagersByStorePath.get(storePath) ?? null;
 }
 
 export interface RateLimitBackoffResult {
@@ -503,14 +517,16 @@ export class AccountManager {
   static async loadFromDisk(authFallback?: OAuthAuthDetails): Promise<AccountManager> {
     const stored = await loadAccounts();
     const manager = new AccountManager(authFallback, stored);
-    // Registry resilience: keep the FIRST manager that becomes active. The main
-    // plugin's instance holds the freshest in-memory token state that quota.ts
-    // resolves through getActiveAccountManager(). Secondary loads of the same
-    // store file (e.g. the bridge headless-launch manager in bridge/auth.ts)
-    // must not clobber it, or quota checks would resolve tokens from the wrong
-    // manager instance.
-    if (getActiveAccountManager() === null) {
-      setActiveAccountManager(manager);
+    // Registry resilience: keep the FIRST manager that becomes active for a
+    // given store path. The main plugin's instance holds the freshest in-memory
+    // token state that quota.ts resolves through getActiveAccountManager().
+    // Secondary loads of the same store file (e.g. the bridge headless-launch
+    // manager in bridge/auth.ts) must not clobber it, or quota checks would
+    // resolve tokens from the wrong manager instance. Managers registered for
+    // DIFFERENT store paths coexist.
+    const storePath = getStoragePath();
+    if (getActiveAccountManager(storePath) === null) {
+      setActiveAccountManager(manager, storePath);
     }
     return manager;
   }

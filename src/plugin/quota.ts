@@ -322,7 +322,16 @@ async function refreshWithRetry(
     try {
       const retried = await refreshAccessToken(retryAuth, client, providerId);
       if (!retried) {
-        throw error;
+        // The retry attempt itself produced no usable token. Surface THAT
+        // failure (with the first attempt's code as context) instead of
+        // re-raising the original stale-token error, which would misattribute
+        // the failure to the pre-rotation state.
+        const firstCode = error instanceof AntigravityTokenRefreshError ? error.code : undefined;
+        throw new Error(
+          `Access token refresh retry did not return a usable token` +
+          (firstCode ? ` (first attempt failed with ${firstCode})` : "") +
+          `. Check antigravity token logs for the exact failure.`,
+        );
       }
       propagateToMemory(inMemoryAccount, retried);
       return retried;

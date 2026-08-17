@@ -246,6 +246,28 @@ describe("checkAccountsQuota auth resolution", () => {
     expect(results[0]!.quota?.error).toBe("Showing cached quota data.");
   });
 
+  it("RETRY EMPTY RESULT: empty retry result surfaces the RETRY failure, not the original stale-token error", async () => {
+    const storedAccount = baseAccount();
+    setActiveAccountManager(
+      makeManager([baseAccount({ email: "quota@example.com", refreshToken: "rotated-token" })]),
+    );
+
+    // First attempt: stale-snapshot invalid_grant. Retry resolves empty (no
+    // usable token) — the surfaced error must describe the retry attempt (with
+    // the first attempt's code only as context), not re-raise the original.
+    vi.mocked(refreshAccessToken)
+      .mockRejectedValueOnce(invalidGrantError("invalid_grant - token stale"))
+      .mockResolvedValueOnce(undefined);
+
+    const results = await checkAccountsQuota([storedAccount], createClient());
+
+    expect(vi.mocked(refreshAccessToken).mock.calls).toHaveLength(2);
+    expect(results[0]!.status).toBe("error");
+    expect(results[0]!.error).toContain("retry did not return a usable token");
+    expect(results[0]!.error).toContain("invalid_grant");
+    expect(results[0]!.error).not.toContain("token stale");
+  });
+
   it("FAIL-OPEN: a non-token network error propagates immediately and attaches the cached-quota fallback", async () => {
     const storedAccount = baseAccount({
       cachedQuota: { claude: { remainingFraction: 0.6, modelCount: 1 } },

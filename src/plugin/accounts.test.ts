@@ -63,6 +63,35 @@ describe("AccountManager", () => {
     setActiveAccountManager(null);
   });
 
+  it("registry is scoped by store path: different stores hold distinct active managers", async () => {
+    const storedA: AccountStorageV4 = {
+      version: 4,
+      accounts: [{ refreshToken: "r-a", projectId: "p-a", addedAt: 1, lastUsed: 0 }],
+      activeIndex: 0,
+    };
+    const storedB: AccountStorageV4 = {
+      version: 4,
+      accounts: [{ refreshToken: "r-b", projectId: "p-b", addedAt: 1, lastUsed: 0 }],
+      activeIndex: 0,
+    };
+    storageMocks.loadAccounts.mockResolvedValue(storedA);
+
+    // Main plugin startup for the default store.
+    const managerA = await AccountManager.loadFromDisk();
+
+    // A second store (e.g. bridge instance rooted at another path) registers
+    // its own entry and must NOT replace managerA.
+    const managerB = new AccountManager(undefined, storedB);
+    setActiveAccountManager(managerB, "/store/b.json");
+
+    expect(getActiveAccountManager()).toBe(managerA);
+    expect(getActiveAccountManager("/store/b.json")).toBe(managerB);
+    expect(getActiveAccountManager("/store/c.json")).toBeNull();
+
+    setActiveAccountManager(null);
+    setActiveAccountManager(null, "/store/b.json");
+  });
+
   it("returns current account when not rate-limited for family", () => {
     const stored: AccountStorageV4 = {
       version: 4,
