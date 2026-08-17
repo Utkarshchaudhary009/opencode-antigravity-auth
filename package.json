@@ -27,11 +27,11 @@
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/vibheksoni/opencode-antigravity-auth.git"
+        "url": "git+https://github.com/Utkarshchaudhary009/opencode-antigravity-auth.git"
     },
-    "homepage": "https://github.com/vibheksoni/opencode-antigravity-auth#readme",
+    "homepage": "https://github.com/Utkarshchaudhary009/opencode-antigravity-auth#readme",
     "bugs": {
-        "url": "https://github.com/vibheksoni/opencode-antigravity-auth/issues"
+        "url": "https://github.com/Utkarshchaudhary009/opencode-antigravity-auth/issues"
     },
     "keywords": [
         "opencode",

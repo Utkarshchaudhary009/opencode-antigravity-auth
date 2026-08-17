@@ -2,15 +2,7 @@
 
 Antigravity auth, account management, quota inspection, runtime metadata extraction, and bridge support for OpenCode.
 
-This is one of the best-maintained Antigravity plugins for OpenCode. The focus is simple: stay as close as possible to the real installed Antigravity app instead of hardcoding brittle request behavior.
-
-> [!TIP]
-> **Sponsor**
-> OpenAI account subscription upgrades @ discounted rates.
->
-> **Gemini Ultra Accounts @ $20 each**
-> Instant delivery: https://upgrades.astck.com/
-> Use code `repodiscount` for $5 off
+This plugin is maintained as a personal project and stays as close as possible to the real installed Antigravity app instead of hardcoding brittle request behavior.
 
 > [!IMPORTANT]
 > The Antigravity language server and headless bridge path is the most stable way to use Antigravity from OpenCode.
@@ -56,7 +48,7 @@ If the package is installed through OpenCode's plugin installer, OpenCode can de
 ### 1. Clone and install
 
 ```powershell
-git clone https://github.com/vibheksoni/opencode-antigravity-auth.git
+git clone https://github.com/Utkarshchaudhary009/opencode-antigravity-auth.git
 cd opencode-antigravity-auth
 npm install
 npm run build
@@ -528,6 +520,4 @@ npm test -- --run src/plugin/config/schema.test.ts src/plugin/config/updater.tes
 
 ## Acknowledgements
 
-Credit to the original work at [NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth).
-
-This repo has diverged significantly from that older implementation and continues to be maintained around the current Antigravity app behavior, Windows bridge support, runtime metadata extraction, quota tooling, and OpenCode integration.
+This project was inspired by [vibheksoni/opencode-antigravity-auth](https://github.com/vibheksoni/opencode-antigravity-auth), which in turn was forked from the archived [NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth). Thanks to both original projects for the groundwork on Antigravity auth, account management, and OpenCode integration.
