@@ -5,14 +5,14 @@
 > **Assumed shape** (from `docs/HANDOFF.md` §8 + task brief):
 >
 > ```ts
-> type QuotaGroup = "claude" | "gemini-pro" | "gemini-flash";
-> interface WindowBucket { bucketId: string; window: "weekly" | "5h"; remainingFraction?: number; resetTime?: string }
+> type QuotaGroupKey = "gemini" | "3p"; // from schema/weekly-limits.ts: QuotaGroupKeySchema
+> interface WindowBucket { remainingFraction?: number; resetTime?: string }
 > interface QuotaWindowSummary {
->   byGroup: Partial<Record<QuotaGroup, { weekly?: WindowBucket; fiveHour?: WindowBucket }>>;
->   rawBuckets: WindowBucket[];   // fallback / debug
+>   byGroup: Partial<Record<QuotaGroupKey, { weekly?: WindowBucket; fiveHour?: WindowBucket }>>;
+>   rawBuckets: RawBucket[];   // fallback / debug (bucketId + window + fractions)
 >   fetchedAt: number;            // Date.now() at fetch time
 > }
-> // 2 groups x 2 windows in practice: Gemini Models -> gemini-pro+gemini-flash, Claude/GPT -> claude
+> // 2 groups x 2 windows in practice: Gemini Models -> gemini, Claude/GPT -> 3p (see schema/weekly-limits.ts: groupDisplayNameToKey)
 > ```
 >
 > Existing quota types retained: `QuotaGroupSummary`, `QuotaSummary` (`groups` from `fetchAvailableModels`
@@ -76,7 +76,7 @@ Inner row rendering (single account drill via Enter):
 ```
 
 *Two-line per account: top line = percent cells, second line (dim) = reset durations.
-G = Gemini group, C = Claude group; Wk=weekly, 5h=fiveHour. `●` = current.*
+G = `gemini` (Gemini Models), C = `3p` (Claude & GPT); Wk=weekly, 5h=fiveHour. `●` = current.*
 *Copy-pastable plain variant (fallback when `stdout.columns < 80`):*
 ```
 #  Account             G-Wk  G-5h  C-Wk  C-5h  next-reset      status
@@ -98,9 +98,9 @@ G = Gemini group, C = Claude group; Wk=weekly, 5h=fiveHour. `●` = current.*
 | Visual element | Field |
 |----------------|-------|
 | Row label `alice@gmail.com` + `● current` | `AccountMetadataV3.email ?? "Account N"` + `index === activeIndex` |
-| `G-Wk 12%` cell | `quotaSummary.byGroup["gemini-pro"].weekly` (or `gemini-flash.weekly` — merged; HANDOFF maps Gemini Models → both families) `remainingFraction` → `formatQuotaPercent()` else `n/a` |
-| `G-5h 88%` cell | `byGroup["gemini-pro"].fiveHour.remainingFraction` (same group, other window) |
-| `C-Wk / C-5h` | `byGroup["claude"].weekly / byGroup["claude"].fiveHour` |
+| `G-Wk 12%` cell (`Gemini`) | `quotaSummary.byGroup["gemini"].weekly.remainingFraction` → `formatQuotaPercent()` else `n/a` |
+| `G-5h 88%` cell | `byGroup["gemini"].fiveHour.remainingFraction` (same group, other window) |
+| `3P-Wk / 3P-5h` (`Claude & GPT`) | `byGroup["3p"].weekly / byGroup["3p"].fiveHour` |
 | `1d 18h` reset | `WindowBucket.resetTime` → `Date.parse(resetTime) - Date.now()` → `formatWaitTime()` / `formatReset()`; `undefined` → `—` |
 | `low-weekly` badge | `min(weekly.remainingFraction) < 0.2` |
 | `fetched 2m ago` | `quotaSummary.fetchedAt` → `formatRelativeTime()` |
@@ -126,7 +126,7 @@ visual triage by bar fill + color thresholds, opened via `/ag-quota` or as a mod
 
 ```
 ┌  Quota — Gauge View  (bob@gmail.com  ●current  ·  fetched 12s ago) ─┐
-│  Gemini Models  (gemini-pro / gemini-flash)                         │
+│  Gemini Models  (group: gemini)                                      │
 │  Weekly    [█████░░░░░]  45%  resets 3d 02h  (bucket: gemini-weekly) │
 │  5-hour    [█████████░]  92%  resets 4h 11m  (gemini-5h)              │
 │                                                                     │
@@ -166,8 +166,8 @@ Claude  W [██░░░░░░░░] 18% 1d18h | 5h [███████
 
 | Visual element | Field |
 |----------------|-------|
-| Card header `Gemini Models` | Group display grouping: `byGroup["gemini-pro"]` / `byGroup["gemini-flash"]` merged (HANDOFF §8 notes summary has 2 groups vs plugin 3 families; treat `gemini-pro` and `gemini-flash` as one visual group labeled "Gemini") |
-| Card header `Claude & GPT` | `byGroup["claude"]` |
+| Card header `Gemini Models` | `byGroup["gemini"]` (`QuotaGroupKey` = `gemini`, display "Gemini Models") |
+| Card header `Claude & GPT` | `byGroup["3p"]` (`QuotaGroupKey` = `3p`, display "Claude and GPT models") |
 | Bar fill proportion | `WindowBucket.remainingFraction` → `Math.round(clamped * 10)` |
 | Bar color | Same `remainingFraction` thresholds; `undefined` → `dim` |
 | `45%` label | `formatQuotaPercent(remainingFraction)` |
@@ -235,13 +235,13 @@ Disabled row shows `— disabled —` (dim) instead of badges.*
 
 | Visual element | Field |
 |----------------|-------|
-| Roster badge `W12%` | `quotaSummary.byGroup[family].weekly.remainingFraction` → `formatQuotaPercent` compact; if both `gemini-pro` and `gemini-flash` present, show `min(gmProW, gmFlashW)` and suffix `*` |
-| Roster badge `5h88%` | `byGroup[family].fiveHour.remainingFraction` |
+| Roster badge `W12%` | `quotaSummary.byGroup["gemini" | "3p"].weekly.remainingFraction` → `formatQuotaPercent` compact; `family` is `QuotaGroupKey` (`gemini` = Gemini Models, `3p` = Claude & GPT) |
+| Roster badge `5h88%` | `byGroup["gemini" | "3p"].fiveHour.remainingFraction` |
 | `L` low flag | any `weekly.remainingFraction < 0.2` (same as Design 1) |
 | Detail card header `bob@gmail.com` | `AccountMetadataV3.email` + status badges from `accountStatus()` |
 | Detail row `Weekly 18% ██░░… 1d 18h` | Per-group `weekly` bucket → percent + bar + reset |
 | Detail row `5-hour 100%` | Per-group `fiveHour` bucket |
-| `ModelQuota (legacy): 42%` | `cachedQuota["claude"].remainingFraction` (or `gemini-pro` / `gemini-flash`) — legacy `QuotaGroupSummary` shown underneath for comparison/debugging |
+| `ModelQuota (legacy): 42%` | `cachedQuota["claude" | "gemini-pro" | "gemini-flash"].remainingFraction` — legacy `QuotaSummary` (`QuotaGroup`) shown underneath; window quotas above use `QuotaGroupKey` (`gemini`/`3p`) |
 | `Gemini CLI …` | `geminiCliQuota.models[]` (unchanged, already rendered in `runQuotaCheck`) |
 | `fetched 42s ago` | `quotaSummary.fetchedAt` → `formatRelativeTime` |
 
@@ -299,12 +299,12 @@ Fallback narrow (≤50 cols):
 
 | Visual element | Field |
 |----------------|-------|
-| Roster suffix `W12%·1d18h` | `byGroup["claude"].weekly` → `formatQuotaPercent` + `·` + `formatWaitTime(reset)`; if both groups present, show lowest weekly value + count ` (C/G)` = which families contribute |
-| `5h88%·4h11m` | `byGroup["claude"].fiveHour` (or Gemini if `G`) — same pattern |
+| Roster suffix `W12%·1d18h` | `byGroup["3p" | "gemini"].weekly` → `formatQuotaPercent` + `·` + `formatWaitTime(reset)`; if both groups present, show lowest weekly value + count ` (3p/gemini)` = which `QuotaGroupKey` contributes |
+| `5h88%·4h11m` | `byGroup["3p" | "gemini"].fiveHour` — same pattern per group |
 | `W— 5h—` | `undefined` remainingFraction or missing `quotaSummary` → `n/a` compact as `—` |
 | `low-W` tag appended to status | Any weekly `< 0.2` |
-| Detail line `W 18% (1d18h) · 5h 100% (4h50m)` | `byGroup["claude"].weekly` + `byGroup["claude"].fiveHour` appended to existing `Claude: …` title |
-| `(shared)` hint on Gemini Flash | When `byGroup["gemini-pro"].weekly.bucketId === byGroup["gemini-flash"].weekly.bucketId` (same bucketId, e.g. `gemini-weekly`) — indicates shared pool, avoid duplicating fetch |
+| Detail line `W 18% (1d18h) · 5h 100% (4h50m)` | `byGroup["3p"].weekly` + `byGroup["3p"].fiveHour` appended to existing legacy `Claude: …` title (window group `3p`); Gemini rows use `byGroup["gemini"]` |
+| `(shared)` hint | Window quotas have one entry per `QuotaGroupKey` (`gemini`/`3p`); legacy `cachedQuota` `gemini-pro` vs `gemini-flash` sharing is separate (no window duplication) |
 
 ### Pros / Cons
 
@@ -376,9 +376,9 @@ Narrow fallback (Level 3):
 
 | Visual element | Field |
 |----------------|-------|
-| Level 1 row `W min 12% ███░░` | `Math.min(byGroup["claude"].weekly, byGroup["gemini-*.weekly"])` + micro-bar |
+| Level 1 row `W min 12% ███░░` | `Math.min(byGroup["3p"].weekly, byGroup["gemini"].weekly)` + micro-bar |
 | Level 1 `next 1d18h (Wk)` | `earliest resetTime among all 4 buckets` → `formatWaitTime`; badge `(Wk)` vs `(5h)` = which window is the bottleneck |
-| Level 2 row `Claude Weekly 18% ▂▅█▇` | Per `byGroup["claude"].weekly` → percent + inline micro-sparkline from last 7 fetched values (future store) |
+| Level 2 row `Claude Weekly 18% ▂▅█▇` | Per `byGroup["3p"].weekly` → percent + inline micro-sparkline from last 7 fetched values (future store) |
 | Level 3 header `Bucket: 3p-weekly Window: weekly` | `WindowBucket.bucketId` + `WindowBucket.window` |
 | `Remaining: 18%` + bar | `WindowBucket.remainingFraction` |
 | `Reset: 2026-… (in 1d 18h)` | `WindowBucket.resetTime` (ISO passthrough) + derived `formatWaitTime` + `grace_to_deadline_ms` offset |
@@ -414,7 +414,7 @@ Narrow fallback (Level 3):
 ## Cross-Cutting Concerns (apply to all designs)
 
 - **Fail-open rendering:** `remainingFraction === undefined` → render `n/a` (Designs 1/2/3/5) or `—` (Design 4 compact) in `dim`; never `0%`. Threshold checks skip `undefined`. Applies to missing `quotaSummary` (pre-fetch) too → show `— no quota yet —` placeholder.
-- **Shared Gemini bucket:** `retrieveUserQuotaSummary` groups "Gemini Models" map to both `gemini-pro` AND `gemini-flash` (`HANDOFF.md` §8). If `byGroup["gemini-pro"].weekly.bucketId === byGroup["gemini-flash"].weekly.bucketId`, render once with alias `(Pro/Flash shared)` (Designs 3/4 note this; Designs 1/2 merge the cell).
+- **Window grouping:** `retrieveUserQuotaSummary` groups map via `groupDisplayNameToKey` (`schema/weekly-limits.ts:172-178`): "Gemini Models" → `byGroup["gemini"]`, "Claude and GPT models" → `byGroup["3p"]` (`QuotaGroupKey`). This is distinct from legacy `cachedQuota` groups (`QuotaGroup` = `claude` | `gemini-pro` | `gemini-flash` in `src/plugin/quota.ts:34`). Window quotas have one entry per `QuotaGroupKey`, not per-model; no Pro/Flash split.
 - **Legacy vs window co-display:** Keep `cachedQuota` (`quota.ts: `QuotaSummary` per-family from `fetchAvailableModels`) until migration completes. Recommended pattern: render window buckets as primary, legacy as dim secondary `(model quota: 42%)` — makes drift visible.
 - **Reset-time grace:** Display `resetTime` as wall-clock ISO secondary + relative `in Xd Yh`; if `grace_to_deadline_ms` (config) is non-zero, optionally show `+1.5s grace` in detail views (Design 5) but never in compact roster.
 - **Freshness:** Every view header should surface `quotaSummary.fetchedAt` via `formatRelativeTime` (`src/tui.ts:129-141` style). Stale threshold (e.g. `> quota_refresh_interval_minutes * 2`) could show a `↻ stale` badge — future enhancement.
