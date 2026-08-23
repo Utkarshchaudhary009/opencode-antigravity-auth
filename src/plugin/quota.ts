@@ -22,6 +22,7 @@ import { AntigravityTokenRefreshError, refreshAccessToken } from "./token";
 import { getModelFamily } from "./transform/model-resolver";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import type { AccountMetadataV3 } from "./storage";
+import { normalizeRemainingFraction, parseResetTime } from "../../schema/common";
 
 const FETCH_TIMEOUT_MS = 10000;
 const log = createLogger("quota");
@@ -349,24 +350,9 @@ async function refreshWithRetry(
   }
 }
 
-function normalizeRemainingFraction(value: unknown): number | undefined {
-  // Fail-open: missing or invalid input is UNKNOWN (undefined), NOT 0%.
-  // Downstream treats undefined as "usable/unknown" rather than instantly
-  // exhausting an account on a data glitch. Valid numbers clamp to [0, 1].
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.min(1, Math.max(0, value));
-}
-
-function parseResetTime(resetTime?: string): number | null {
-  if (!resetTime) return null;
-  const timestamp = Date.parse(resetTime);
-  if (!Number.isFinite(timestamp)) {
-    return null;
-  }
-  return timestamp;
-}
+// normalizeRemainingFraction and parseResetTime live in schema/common.ts (the
+// canonical fail-open implementations shared with the endpoint schemas) and are
+// imported at the top of this file.
 
 function classifyQuotaGroup(modelName: string, displayName?: string): QuotaGroup | null {
   const combined = `${modelName} ${displayName ?? ""}`.toLowerCase();

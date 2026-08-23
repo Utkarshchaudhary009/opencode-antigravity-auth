@@ -4,15 +4,15 @@ Purpose: zod v4 + strict TS + ESM schemas for every Cloud Code `v1internal:*` en
 
 ## Live probe summary (2026-08-23)
 
-- Storage path resolved via `src/plugin/storage.ts:262` logic (`OPENCODE_CONFIG_DIR` → `XDG_CONFIG_HOME` → `~/.config/opencode/antigravity-accounts.json`): `C:\Users\acerr\.config\opencode\antigravity-accounts.json` (v4, 4 accounts)
-- Token: `refreshAccessToken()` from `src/plugin/token.ts` on account 0 (`utk***@***`, project `fit-map-8hv63`) → `tok_ya29.a0A…` (first 8 chars `ya29.a0A`, expires `2026-08-23T06:46:38.353Z`)
+- Storage path resolved via `src/plugin/storage.ts:262` logic (`OPENCODE_CONFIG_DIR` → `XDG_CONFIG_HOME` → `~/.config/opencode/antigravity-accounts.json`): `<user-config-dir>/opencode/antigravity-accounts.json` (v4, 4 accounts)
+- Token: `refreshAccessToken()` from `src/plugin/token.ts` on account 0 (`<email-redacted>`, project `<project-id>`) → access token issued (value + expiry not recorded)
 - Headers: `Authorization: Bearer …`, `Content-Type: application/json`, `User-Agent: antigravity/1.22.2 windows/amd64` (from `src/constants.ts:getAntigravityHeaders`)
 - Host: `https://cloudcode-pa.googleapis.com` plus verified on `daily-cloudcode-pa.googleapis.com` and `daily-cloudcode-pa.sandbox.googleapis.com`
 
 | Endpoint | Method | URL | Body | Status | Key fields (camelCase) |
 |---|---|---|---|---|---|
-| `retrieveUserQuota` | POST | `/v1internal:retrieveUserQuota` | `{project:"fit-map-8hv63"}` or `{}` | 200 | `buckets[]:{tokenType:"WTUS", modelId, remainingFraction 0-1, resetTime? ISO}` 25 entries; internal tab models lack `resetTime`; **no weekly** |
-| `fetchAvailableModels` | POST | `/v1internal:fetchAvailableModels` | `{project:"fit-map-8hv63"}` or `{}` | 200 | `models:Record<id, {displayName, quotaInfo:{remainingFraction, resetTime?}, model, apiProvider, ...}>` MAP, 24 models; `defaultAgentModelId`, `deprecatedModelIds`, `experimentIds` |
+| `retrieveUserQuota` | POST | `/v1internal:retrieveUserQuota` | `{project:"<project-id>"}` or `{}` | 200 | `buckets[]:{tokenType:"WTUS", modelId, remainingFraction 0-1, resetTime? ISO}` 25 entries; internal tab models lack `resetTime`; **no weekly** |
+| `fetchAvailableModels` | POST | `/v1internal:fetchAvailableModels` | `{project:"<project-id>"}` or `{}` | 200 | `models:Record<id, {displayName, quotaInfo:{remainingFraction, resetTime?}, model, apiProvider, ...}>` MAP, 24 models; `defaultAgentModelId`, `deprecatedModelIds`, `experimentIds` |
 | `retrieveUserQuotaSummary` (**weekly**) | POST | `/v1internal:retrieveUserQuotaSummary` | `{}` or `{project:"…"}` | 200 (all 3 hosts) | `groups[]:{displayName, description, buckets[]:{bucketId:"gemini-weekly"/"gemini-5h"/"3p-weekly"/"3p-5h", window:"weekly"/"5h", remainingFraction, resetTime, displayName}}` 2 groups, weekly+5h each; also top-level `description` |
 | `loadCodeAssist` | POST | `/v1internal:loadCodeAssist` | `{metadata:{ideType:"ANTIGRAVITY"}}` | 200 | `{currentTier:{id, name, ...}, allowedTiers[], cloudaicompanionProject, paidTier}` |
 | `fetchUserInfo` | POST | `/v1internal:fetchUserInfo` | `{}` | 200 | `{userSettings:{}, regionCode:"IN"}` |
@@ -39,24 +39,30 @@ Each file:
 ## How other agents import
 
 ```ts
-import { RetrieveUserQuotaSummaryResponseSchema, type RetrieveUserQuotaSummaryResponse } from "./schema/weekly-limits.ts";
-// or from built dist if you re-export
-import { FetchAvailableModelsResponseSchema } from "./schema/models.ts";
-import { RemainingFractionSchema } from "./schema/common.ts";
+import { RetrieveUserQuotaSummaryResponseSchema, type RetrieveUserQuotaSummaryResponse } from "../schema/weekly-limits";
+// or from the installed package (built dist, exported via package.json "./schema"):
+import { FetchAvailableModelsResponseSchema } from "opencode-antigravity-auth/schema";
+import { RemainingFractionSchema } from "../schema/common";
 ```
 
 ## How to regenerate (live probe)
 
+The throwaway probe script (`__live_probe.ts`) is intentionally not checked in.
+To re-probe, write a small script locally that:
+
 ```powershell
 # 1. Ensure env has OPENCODE_ANTIGRAVITY_CLIENT_ID / SECRET (see src/constants.ts)
-# 2. Run throwaway probe (see deleted __live_probe.ts for reference):
-bun run __live_probe.ts
-# It uses: src/plugin/storage.ts path resolution, src/plugin/token.ts:refreshAccessToken,
-# src/constants.ts:getAntigravityHeaders, src/plugin/project.ts:ensureProjectContext,
-# and probes: retrieveUserQuota / fetchAvailableModels / retrieveUserQuotaSummary (+ daily hosts) / loadCodeAssist / fetchUserInfo + 401 error shape.
-# 3. Copy redacted response shapes into the comment blocks above each schema.
-# 4. Adjust zod schemas to match observed field names (camelCase, optional resetTime, etc.).
-# 5. Verify:
+# 2. Write a local (git-ignored) probe script that reuses the plugin's own helpers:
+#    - src/plugin/storage.ts path resolution
+#    - src/plugin/token.ts:refreshAccessToken
+#    - src/constants.ts:getAntigravityHeaders
+#    - src/plugin/project.ts:ensureProjectContext
+#    and POSTs to: retrieveUserQuota / fetchAvailableModels / retrieveUserQuotaSummary
+#    (+ daily hosts) / loadCodeAssist / fetchUserInfo + a 401 error-shape check.
+# 3. Run it, e.g.:  bun run __live_probe.ts   # file stays untracked
+# 4. Copy redacted response shapes into the comment blocks above each schema.
+# 5. Adjust zod schemas to match observed field names (camelCase, optional resetTime, etc.).
+# 6. Verify:
 npm run typecheck
 git status # must show no secrets
 ```

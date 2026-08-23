@@ -21,6 +21,10 @@
         "./tui": {
             "import": "./dist/tui.js",
             "types": "./dist/tui.d.ts"
+        },
+        "./schema": {
+            "import": "./dist/schema/index.js",
+            "types": "./dist/schema/index.d.ts"
         }
     },
     "type": "module",

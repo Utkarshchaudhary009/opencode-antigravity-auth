@@ -4,10 +4,10 @@
  * Live probe (2026-08-23):
  *   - Storage path resolved via src/plugin/storage.ts logic:
  *     OPENCODE_CONFIG_DIR > XDG_CONFIG_HOME > ~/.config/opencode/antigravity-accounts.json
- *     Found: C:\Users\acerr\.config\opencode\antigravity-accounts.json (v4, 4 accounts)
- *   - Refreshed account 0 (utk***@***, project fit-map-8hv63, isGcpTos=false)
- *     via refreshAccessToken() → tok_ya29.a0A… (first 8 chars: ya29.a0A) expires 2026-08-23T06:46:38.353Z
- *     Client: OPENCODE_ANTIGRAVITY_CLIENT_ID (10710060…) / secret len 35; isGcpTos selects GCP-ToS client.
+ *     Found: <user-config-dir>/opencode/antigravity-accounts.json (v4, 4 accounts)
+ *   - Refreshed account 0 (<email-redacted>, project <project-id>, isGcpTos=false)
+ *     via refreshAccessToken() → access token issued (value + expiry not recorded)
+ *     Client: OPENCODE_ANTIGRAVITY_CLIENT_ID / secret from env; isGcpTos selects GCP-ToS client.
  *   - HTTP: POST https://oauth2.googleapis.com/token  Content-Type: application/x-www-form-urlencoded
  *
  * REDACTED success example (observed via token.ts log redaction):
