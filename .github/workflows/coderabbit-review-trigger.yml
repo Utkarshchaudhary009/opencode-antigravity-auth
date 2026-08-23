@@ -1,0 +1,30 @@
+name: Trigger CodeRabbit Review
+
+# Posts "@coderabbitai review" when a PR is created (or leaves draft state).
+# Uses pull_request_target so the GITHUB_TOKEN can comment on fork PRs;
+# safe because this workflow never checks out or executes PR code.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: coderabbit-trigger-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  trigger-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request CodeRabbit review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '@coderabbitai review'
+            });
