@@ -677,7 +677,7 @@ export async function checkAccountsQuota(
           projectContext.effectiveProjectId,
           projectContext.routeState,
         ).catch(() => ({ models: undefined })),
-        fetchGeminiCliQuota(auth.access ?? "", projectContext.effectiveProjectId),
+        fetchGeminiCliQuota(auth.access ?? "", projectContext.effectiveProjectId).catch(() => ({ buckets: [] })),
         fetchWeeklyLimits(auth, projectContext.effectiveProjectId, projectContext.routeState).catch((error) => {
           if (error instanceof AntigravityTokenRefreshError) throw error;
           log.debug("weekly-limits-fetch-failed-fail-open", {
