@@ -172,7 +172,7 @@ Claude  W [██░░░░░░░░] 18% 1d18h | 5h [███████
 | Bar color | Same `remainingFraction` thresholds; `undefined` → `dim` |
 | `45%` label | `formatQuotaPercent(remainingFraction)` |
 | `resets 3d 02h` | `WindowBucket.resetTime` → `formatWaitTime(Date.parse(resetTime)-Date.now())` |
-| `bucket: gemini-weekly` suffix (dim) | `WindowBucket.bucketId` |
+| `bucket: gemini-weekly` suffix (dim) | Bucket id via `quotaSummary.rawBuckets[].bucketId` correlated by group+window (`WeeklyBucketIdSchema` order: `gemini-weekly`, `gemini-5h`, `3p-weekly`, `3p-5h`) — `WindowBucket` has no `bucketId` field |
 | Account switcher `W min 12%` | `Math.min(...weekly fractions)` per account |
 | `fetched 12s ago` | `quotaSummary.fetchedAt` |
 | `[R] Refresh` action | `checkAccountsQuota([account])` for single account |
@@ -235,7 +235,7 @@ Disabled row shows `— disabled —` (dim) instead of badges.*
 
 | Visual element | Field |
 |----------------|-------|
-| Roster badge `W12%` | `quotaSummary.byGroup["gemini" | "3p"].weekly.remainingFraction` → `formatQuotaPercent` compact; `family` is `QuotaGroupKey` (`gemini` = Gemini Models, `3p` = Claude & GPT) |
+| Roster badge `W12%` | `quotaSummary.byGroup[toQuotaGroup(family)].weekly.remainingFraction` → `formatQuotaPercent` compact; map account/model `family` (`ModelFamily` = `claude`/`gemini`, `storage.ts`) to its `QuotaGroupKey` first — `claude` → `3p` (Claude & GPT), `gemini` → `gemini` (Gemini Models). `family` itself is **not** a `QuotaGroupKey`; indexing `byGroup` with it directly drops Claude/GPT badges |
 | Roster badge `5h88%` | `byGroup["gemini" | "3p"].fiveHour.remainingFraction` |
 | `L` low flag | any `weekly.remainingFraction < 0.2` (same as Design 1) |
 | Detail card header `bob@gmail.com` | `AccountMetadataV3.email` + status badges from `accountStatus()` |
@@ -379,10 +379,10 @@ Narrow fallback (Level 3):
 | Level 1 row `W min 12% ███░░` | `Math.min(byGroup["3p"].weekly, byGroup["gemini"].weekly)` + micro-bar |
 | Level 1 `next 1d18h (Wk)` | `earliest resetTime among all 4 buckets` → `formatWaitTime`; badge `(Wk)` vs `(5h)` = which window is the bottleneck |
 | Level 2 row `Claude Weekly 18% ▂▅█▇` | Per `byGroup["3p"].weekly` → percent + inline micro-sparkline from last 7 fetched values (future store) |
-| Level 3 header `Bucket: 3p-weekly Window: weekly` | `WindowBucket.bucketId` + `WindowBucket.window` |
+| Level 3 header `Bucket: 3p-weekly Window: weekly` | `rawBuckets[].bucketId` + `rawBuckets[].window` — correlate via `quotaSummary.rawBuckets` (or known `WeeklyBucketIdSchema` order); `WindowBucket` only carries `remainingFraction`/`resetTime` |
 | `Remaining: 18%` + bar | `WindowBucket.remainingFraction` |
 | `Reset: 2026-… (in 1d 18h)` | `WindowBucket.resetTime` (ISO passthrough) + derived `formatWaitTime` + `grace_to_deadline_ms` offset |
-| `Description: Weekly Limit …` | `rawBuckets[].description` (from `groups[].buckets[].description` in `retrieveUserQuotaSummary`, preserved in `rawBuckets`) |
+| `Description: Weekly Limit …` | Not resolvable from stored `rawBuckets` today — `RawBucketSchema` has no `description`/`displayName` field (those exist only on raw endpoint types `WeeklyBucket`/`QuotaGroupEntry`). Either add optional `displayName` passthrough to `RawBucketSchema` during normalization or drop this row until then |
 | Sparkline | Array of last N `remainingFraction` per `bucketId` (requires new time-series store; doc proposes placeholder single-point `▇` until history accumulates) |
 | `Raw buckets (debug)` | `quotaSummary.rawBuckets.map(b => bucketId window fraction resetTime)` |
 
@@ -420,7 +420,7 @@ Narrow fallback (Level 3):
 - **Freshness:** Every view header should surface `quotaSummary.fetchedAt` via `formatRelativeTime` (`src/tui.ts:129-141` style). Stale threshold (e.g. `> quota_refresh_interval_minutes * 2`) could show a `↻ stale` badge — future enhancement.
 - **A11y / ANSI:** Color is supplementary only — every color-coded bar has a percent label; use `ANSI.dim` (not color alone) for `disabled`/`n/a`. Ensure `stripAnsi` tests cover truncation (as in `select.ts:31-69`).
 - **Testing pattern:** Follow `ansi.test.ts` / `auth-menu.test.ts` conventions — vitest globals, pure helper tests first (bar, badge, sparkline), no filesystem/network I/O. Mock `Date.now()` for `formatWaitTime` determinism.
-- **Telemetry / logs:** No bucket payload should be logged at `info` — only `debug` redacted as in `quota.ts` (email redacted to `…`). Keep `rawBuckets[].bucketId` safe; never log full `refreshToken`.
+- **Telemetry / logs:** Current quota debug records and quota-fetch error details include **unredacted** account emails (`email: account.email` in `src/plugin/quota.ts` debug/log calls) — redact account identifiers (e.g. truncate local-part to `…`) before logging when wiring these views, or fix the helpers first. No bucket payload should be logged at `info`; keep `rawBuckets[].bucketId` safe and never log full `refreshToken`.
 
 ---
 
