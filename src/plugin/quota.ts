@@ -22,6 +22,11 @@ import { AntigravityTokenRefreshError, refreshAccessToken } from "./token";
 import { getModelFamily } from "./transform/model-resolver";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import type { AccountMetadataV3 } from "./storage";
+import {
+  emptyQuotaWindowSummary,
+  fetchWeeklyLimits,
+  type QuotaWindowSummary,
+} from "./weekly-limits";
 
 const FETCH_TIMEOUT_MS = 10000;
 const log = createLogger("quota");
@@ -74,6 +79,8 @@ export interface AccountQuotaResult {
   disabled?: boolean;
   quota?: QuotaSummary;
   geminiCliQuota?: GeminiCliQuotaSummary;
+  /** Weekly + 5h window quotas from retrieveUserQuotaSummary (ephemeral, per-check, not persisted). */
+  weeklyLimits?: QuotaWindowSummary;
   updatedAccount?: AccountMetadataV3;
 }
 
@@ -659,16 +666,29 @@ export async function checkAccountsQuota(
 
       let quotaResult: QuotaSummary;
       let geminiCliQuotaResult: GeminiCliQuotaSummary;
-      
-      // Fetch both Antigravity and Gemini CLI quotas in parallel
-      const [antigravityResponse, geminiCliResponse] = await Promise.all([
+      let weeklyLimits: QuotaWindowSummary;
+
+      // Fetch Antigravity, Gemini CLI, and Weekly (retrieveUserQuotaSummary) quotas in parallel.
+      // Weekly limits are ephemeral per-check (not persisted) — avoids V4→V5 migration churn;
+      // see docs/HANDOFF.md §6 and src/plugin/weekly-limits.ts for caching rationale.
+      const [antigravityResponse, geminiCliResponse, weeklyLimitsResult] = await Promise.all([
         fetchAvailableModelsCatalog(
           auth.access ?? "",
           projectContext.effectiveProjectId,
           projectContext.routeState,
         ).catch(() => ({ models: undefined })),
         fetchGeminiCliQuota(auth.access ?? "", projectContext.effectiveProjectId),
+        fetchWeeklyLimits(auth, projectContext.effectiveProjectId, projectContext.routeState).catch((error) => {
+          if (error instanceof AntigravityTokenRefreshError) throw error;
+          log.debug("weekly-limits-fetch-failed-fail-open", {
+            index,
+            email: account.email,
+            error: String(error),
+          });
+          return emptyQuotaWindowSummary();
+        }),
       ]);
+      weeklyLimits = weeklyLimitsResult;
 
       // Process Antigravity quota
       if (antigravityResponse.models === undefined) {
@@ -696,7 +716,15 @@ export async function checkAccountsQuota(
         disabled,
         quota: quotaResult,
         geminiCliQuota: geminiCliQuotaResult,
+        weeklyLimits,
         updatedAccount,
+      });
+
+      log.debug("quota-weekly-limits", {
+        index,
+        email: account.email,
+        weeklyLimitsGroups: Object.keys(weeklyLimits.byGroup).join(",") || "none",
+        rawBuckets: weeklyLimits.rawBuckets.length,
       });
       
       // Log quota status for each family (undefined fraction => unknown, not exhausted)

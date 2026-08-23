@@ -302,7 +302,8 @@ The plugin manages **two independent quota pools**:
 |----------|-----------|-----------------|
 | `fetchAvailableModelsCatalog` | `model-catalog.ts:224-256` | Models + quotaInfo from `v1internal:fetchAvailableModels` |
 | `fetchGeminiCliQuota` | `quota.ts (fetchGeminiCliQuota)` | Buckets from `v1internal:retrieveUserQuota` |
-| `checkAccountsQuota` | `quota.ts (checkAccountsQuota)` | Orchestrates both probes in `Promise.all` per account |
+| `fetchWeeklyLimits` | `weekly-limits.ts:fetchWeeklyLimits` | Weekly+5h windows from `v1internal:retrieveUserQuotaSummary` (10s timeout, Bearer+UA `antigravity/1.22.2`, zod `RetrieveUserQuotaSummaryResponseSchema`, `byGroup` via `inferWindowFromBucketId`/`groupDisplayNameToKey`, fail-open empty on non-ok/network, 401/403 → `AntigravityTokenRefreshError`) |
+| `checkAccountsQuota` | `quota.ts (checkAccountsQuota)` | Orchestrates 3 probes in `Promise.all` per account (`fetchAvailableModelsCatalog` + `fetchGeminiCliQuota` + `fetchWeeklyLimits` fail-open via `emptyQuotaWindowSummary`); returns `AccountQuotaResult` with optional `weeklyLimits?: QuotaWindowSummary` (ephemeral per-check, not persisted — see `weekly-limits.ts` caching note) |
 | `triggerAsyncQuotaRefreshForAccount` | `plugin.ts:126-170` | Fire-and-forget post-success refresh, gated by interval |
 
 ### Rate-limit state machine
