@@ -35,9 +35,11 @@ import {
 // Lenient schema for parsing — allows out-of-range fractions and invalid resetTimes
 // so that normalization (clamping / fail-open) can handle them instead of failing zod.
 // This avoids strict RemainingFractionSchema (0-1) and ResetTimeSchema rejecting buckets.
+// bucketId is unknown here: normalization skips only the unusable bucket instead of
+// the lenient parse rejecting the whole response over a single malformed bucket.
 const LenientWeeklyBucketSchema = z
   .object({
-    bucketId: z.string(),
+    bucketId: z.unknown().optional(),
     displayName: z.string().optional(),
     window: z.string().optional(),
     resetTime: z.string().optional(),
@@ -88,13 +90,20 @@ function getAccessToken(auth: OAuthAuthDetails | string): string {
   return "";
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
+/**
+ * Abort signal that stays active until the caller finishes reading the body —
+ * a server can send headers then stall, so the timeout must cover response
+ * consumption too. Call `done()` once the body has been read (or skipped).
+ */
+async function openRequest(url: string, init: RequestInit): Promise<{ response: Response; done: () => void }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return { response, done: () => clearTimeout(timeout) };
+  } catch (error) {
     clearTimeout(timeout);
+    throw error;
   }
 }
 
@@ -227,16 +236,18 @@ export async function fetchWeeklyLimits(
 
   for (const endpoint of endpoints) {
     const url = `${endpoint}/v1internal:retrieveUserQuotaSummary`;
+    let done: (() => void) | undefined;
     try {
-      const response = await fetchWithTimeout(
+      const opened = await openRequest(
         url,
         {
           method: "POST",
           headers,
           body: JSON.stringify(body),
         },
-        FETCH_TIMEOUT_MS,
       );
+      done = opened.done;
+      const response = opened.response;
 
       if (response.status === 401 || response.status === 403) {
         const text = await response.text().catch(() => "");
@@ -277,7 +288,7 @@ export async function fetchWeeklyLimits(
           endpoint,
           error: lenientParsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
         });
-        return emptyQuotaWindowSummary();
+        continue; // try next host; fail-open only after the loop is exhausted
       }
 
       const summary = normalizeResponse(lenientParsed.data);
@@ -299,6 +310,9 @@ export async function fetchWeeklyLimits(
       // Network or other — try next endpoint, fail-open if exhausted
       log.debug("weekly-limits-network-error", { endpoint, error: String(error) });
       continue;
+    } finally {
+      // Timer stays live through body reads above; stop it once this attempt ends.
+      done?.();
     }
   }
 

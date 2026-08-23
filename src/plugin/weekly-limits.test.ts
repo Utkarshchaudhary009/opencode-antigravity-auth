@@ -282,6 +282,35 @@ describe("fetchWeeklyLimits", () => {
     expect(result.rawBuckets).toEqual([]);
   });
 
+  it("malformed payload on primary host → falls back to next endpoint instead of failing open early", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(FULL_RESPONSE));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ groups: "not-an-array" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await fetchWeeklyLimits(makeAuth());
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(result.byGroup.gemini?.weekly?.remainingFraction).toBe(1);
+    expect(result.rawBuckets).toHaveLength(4);
+  });
+
+  it("one bucket with non-string bucketId → only that bucket skipped, others preserved", async () => {
+    const oneBad = {
+      groups: [
+        {
+          displayName: "Gemini Models",
+          buckets: [
+            { bucketId: 42, window: "weekly", remainingFraction: 0.5 }, // unusable bucket
+            { bucketId: "gemini-weekly", window: "weekly", remainingFraction: 0.9, resetTime: "2026-08-30T05:47:08Z" },
+          ],
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(oneBad)));
+    const result = await fetchWeeklyLimits(makeAuth());
+    expect(result.byGroup.gemini?.weekly?.remainingFraction).toBe(0.9);
+    expect(result.rawBuckets).toHaveLength(1);
+    expect(result.rawBuckets[0]?.bucketId).toBe("gemini-weekly");
+  });
+
   it("uses project body {} when no projectId, and {project} when provided", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(FULL_RESPONSE));
     vi.stubGlobal("fetch", fetchMock);

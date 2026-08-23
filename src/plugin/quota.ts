@@ -678,8 +678,11 @@ export async function checkAccountsQuota(
           projectContext.routeState,
         ).catch(() => ({ models: undefined })),
         fetchGeminiCliQuota(auth.access ?? "", projectContext.effectiveProjectId).catch(() => ({ buckets: [] })),
+        // Fail-open unconditionally (incl. AntigravityTokenRefreshError): auth was just
+        // validated via refreshWithRetry above, and the enclosing catch only records a
+        // per-account error without refreshing — rethrowing here would discard this
+        // account's other successful probes over an ephemeral auxiliary result.
         fetchWeeklyLimits(auth, projectContext.effectiveProjectId, projectContext.routeState).catch((error) => {
-          if (error instanceof AntigravityTokenRefreshError) throw error;
           log.debug("weekly-limits-fetch-failed-fail-open", {
             index,
             email: account.email,
