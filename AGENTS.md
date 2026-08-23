@@ -29,7 +29,6 @@ src/
   hooks/auto-update-checker/
   antigravity/             # runtime metadata extraction
   cli/ constants.ts
-schema/                    # endpoint response schemas (weekly limits)
 index.ts tui.ts            # dist exports
 script/                    # build-schema, e2e tests
 assets/ docs/HANDOFF.md
@@ -69,7 +68,7 @@ npm run build:schema     # regenerate assets/antigravity.schema.json
 
 1. Read the files the task needs.
 2. Implement the smallest change that solves it.
-3. **Gates:** typecheck, test, lint green before any commit.
+3. **Gates:** typecheck and test green before any commit.
 4. Local review subagent over the diff; fix what it flags.
 5. Commit + PR. Large sequential work → **stack** instead: one concern per layer, dependencies point downward, every layer passes the gates alone. `gh stack init/add/push/submit`; land via `gh stack merge` (plain `gh pr merge` fails on stacks).
 6. After ~10 min, address GitHub bot reviews: fix in the **lowest layer owning the issue**, then `gh stack rebase --upstack` if stacked; commit.
