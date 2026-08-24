@@ -18,6 +18,7 @@
  * //     { "resetTime": "2026-08-23T10:46:49Z", "tokenType": "WTUS…[redacted]", "modelId": "claude-sonnet-4-6", "remainingFraction": 1 },
  * //     { "resetTime": "2026-08-23T10:46:49Z", "tokenType": "WTUS…[redacted]", "modelId": "gemini-2.5-flash", "remainingFraction": 1 }
  * //     // ... +20 more (gemini-3-*, gpt-oss-120b-medium, etc.)
+ * //   ]
  * // }
  * // Notes:
  * // - Field names are camelCase: remainingFraction (0-1), resetTime (ISO 8601 UTC), tokenType (always "WTUS"), modelId
