@@ -6,8 +6,15 @@
 import { z } from "zod";
 
 // Fraction in [0,1] — 1 = 100% remaining, 0 = exhausted. Undefined => unknown (fail-open).
-export const RemainingFractionSchema = z.number().min(0).max(1);
-export type RemainingFraction = z.infer<typeof RemainingFractionSchema>;
+// Fail-open policy (mirrors src/plugin/quota.ts): valid numbers clamp to [0, 1];
+// invalid values (missing, NaN, non-number) become undefined instead of rejecting
+// the whole response or reporting a false 0%.
+export const RemainingFractionSchema: z.ZodType<number | undefined> = z
+  .unknown()
+  .transform((v) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined,
+  );
+export type RemainingFraction = number | undefined;
 
 export const RemainingFractionOptionalSchema = RemainingFractionSchema.optional();
 export type RemainingFractionOptional = z.infer<typeof RemainingFractionOptionalSchema>;
@@ -62,12 +69,16 @@ export const CloudCodeHostSchema = z.enum([
 ]);
 export type CloudCodeHost = z.infer<typeof CloudCodeHostSchema>;
 
-// Utility: normalize remainingFraction similar to src/plugin/quota.ts:normalizeRemainingFraction (fail-open)
+// Canonical fail-open quota helpers. src/plugin/quota.ts imports these instead of
+// redefining them, so behavioral fixes propagate to both the schema and runtime paths.
+
+/** Clamp a raw remainingFraction to [0, 1]; invalid input → undefined (unknown, fail-open). */
 export function normalizeRemainingFraction(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return Math.min(1, Math.max(0, value));
 }
 
+/** Parse an ISO-8601 resetTime into an epoch ms timestamp; missing/invalid → null. */
 export function parseResetTime(resetTime?: string): number | null {
   if (!resetTime) return null;
   const ts = Date.parse(resetTime);
