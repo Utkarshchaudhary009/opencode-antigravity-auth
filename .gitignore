@@ -49,6 +49,7 @@ test-file.ts
 src/**/*.test.ts
 !src/plugin/grace-retry.test.ts
 !src/plugin/quota.test.ts
+!src/plugin/weekly-limits.test.ts
 !src/tui.test.ts
 src/**/*.test.tsx
 src/**/*.spec.ts
