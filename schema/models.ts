@@ -1,4 +1,4 @@
-﻿/**
+/**
  * FetchAvailableModels — Cloud Code v1internal:fetchAvailableModels
  *
  * Live probe 2026-08-23 (Bearer ya29.a0Ad…, UA antigravity/1.22.2 windows/amd64, prod):

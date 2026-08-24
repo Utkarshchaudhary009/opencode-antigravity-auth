@@ -1,4 +1,4 @@
-﻿/**
+/**
  * RetrieveUserQuotaSummary — Cloud Code v1internal:retrieveUserQuotaSummary (WEEKLY LIMITS)
  *
  * PRIMARY deliverable for feat/weekly-limit-fetch. Spec: HANDOFF.md §6 + §8.
