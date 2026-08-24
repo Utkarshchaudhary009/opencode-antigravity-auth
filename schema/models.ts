@@ -1,12 +1,12 @@
 ﻿/**
- * FetchAvailableModels â€” Cloud Code v1internal:fetchAvailableModels
+ * FetchAvailableModels — Cloud Code v1internal:fetchAvailableModels
  *
- * Live probe 2026-08-23 (Bearer ya29.a0Adâ€¦, UA antigravity/1.22.2 windows/amd64, prod):
+ * Live probe 2026-08-23 (Bearer ya29.a0Ad…, UA antigravity/1.22.2 windows/amd64, prod):
  *
  *   POST https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
- *   Headers: { Authorization: Bearer ya29.a0Adâ€¦, Content-Type: application/json, User-Agent: antigravity/1.22.2 windows/amd64 }
- *   Body: { "project": "<project-id>" }  â€” also succeeds with {}
- *   Status: 200 OK  (fallback chain: prod â†’ daily â†’ daily-sandbox â†’ autopush, see src/plugin/cloud-code.ts)
+ *   Headers: { Authorization: Bearer ya29.a0Ad…, Content-Type: application/json, User-Agent: antigravity/1.22.2 windows/amd64 }
+ *   Body: { "project": "<project-id>" }  — also succeeds with {}
+ *   Status: 200 OK  (fallback chain: prod → daily → daily-sandbox → autopush, see src/plugin/cloud-code.ts)
  *
  * REDACTED observed response (24 models shown as MAP keyed by model ID; abbreviated):
  * // {
@@ -16,7 +16,7 @@
  * //       "supportsImages": true, "supportsThinking": true, "thinkingBudget": -1, "minThinkingBudget": 32,
  * //       "recommended": true, "maxTokens": 1048576, "maxOutputTokens": 65536,
  * //       "quotaInfo": { "remainingFraction": 1, "resetTime": "2026-08-23T10:47:02Z" },
- * //       "model": "MODEL_â€¦[redacted len=21]", "apiProvider": "API_PRâ€¦[redacted]", "modelProvider": "MODEL_â€¦[redacted]",
+ * //       "model": "MODEL_…[redacted len=21]", "apiProvider": "API_PR…[redacted]", "modelProvider": "MODEL_…[redacted]",
  * //       "supportsVideo": true, "tagTitle": "Fast", "tagDescription": "Limited time",
  * //       "supportedMimeTypes": { "image/png": true, "application/pdf": true, ... },
  * //       "modelExperiments": { "experiments": { "CASCADE_USE_EXPERIMENT_CHECKPOINTER": { "stringValue": "..." } } }
@@ -45,10 +45,10 @@
  *  - Per-model quotaInfo mirrors retrieveUserQuota buckets but keyed by model: { remainingFraction: 0-1, resetTime?: ISO }.
  *  - Internal/tab models lack resetTime; beta/disabled/deprecated filtered by src/plugin/model-catalog.ts.
  *  - This endpoint is the source for runtime model discovery (src/plugin/model-catalog.ts:fetchAvailableModelsCatalog) and
- *    the proposed model-propagation pipeline (HANDOFF Â§9).
+ *    the proposed model-propagation pipeline (HANDOFF §9).
  */
 import { z } from "zod";
-import { RemainingFractionSchema, ResetTimeSchema } from "./common";
+import { RemainingFractionSchema, ResetTimeSchema } from "./common.ts";
 
 export const FetchAvailableModelsRequestSchema = z
   .object({
