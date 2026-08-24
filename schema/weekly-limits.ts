@@ -1,21 +1,21 @@
 ﻿/**
- * RetrieveUserQuotaSummary â€” Cloud Code v1internal:retrieveUserQuotaSummary (WEEKLY LIMITS)
+ * RetrieveUserQuotaSummary — Cloud Code v1internal:retrieveUserQuotaSummary (WEEKLY LIMITS)
  *
- * PRIMARY deliverable for feat/weekly-limit-fetch. Spec: HANDOFF.md Â§6 + Â§8.
+ * PRIMARY deliverable for feat/weekly-limit-fetch. Spec: HANDOFF.md §6 + §8.
  *
- * Live probe 2026-08-23 (Windows, Bearer ya29.a0Adâ€¦ redacted, account <email-redacted> / <project-id>):
+ * Live probe 2026-08-23 (Windows, Bearer ya29.a0Ad… redacted, account <email-redacted> / <project-id>):
  *
  *   POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
- *   Headers: { Authorization: Bearer ya29.a0Adâ€¦, Content-Type: application/json, User-Agent: antigravity/1.22.2 windows/amd64 }
- *   Body: {}                        â†’ 200 OK  (also succeeds with { "project": "<project-id>" })
- *   Body: { "project": "â€¦" }        â†’ 200 OK (same shape, resetTime skews ~2-3s)
- *   Daily hosts also succeed: daily-cloudcode-pa.googleapis.com + daily-cloudcode-pa.sandbox.googleapis.com â†’ 200
- *   Invalid token â†’ 401 { error: { code: 401, status: "UNAUTHENTICATED", message: "Request had invalid authentication credentials..." } }
+ *   Headers: { Authorization: Bearer ya29.a0Ad…, Content-Type: application/json, User-Agent: antigravity/1.22.2 windows/amd64 }
+ *   Body: {}                        → 200 OK  (also succeeds with { "project": "<project-id>" })
+ *   Body: { "project": "…" }        → 200 OK (same shape, resetTime skews ~2-3s)
+ *   Daily hosts also succeed: daily-cloudcode-pa.googleapis.com + daily-cloudcode-pa.sandbox.googleapis.com → 200
+ *   Invalid token → 401 { error: { code: 401, status: "UNAUTHENTICATED", message: "Request had invalid authentication credentials..." } }
  *
- * Field naming is camelCase (remainingFraction, resetTime, bucketId, displayName, window) â€” NOT snake_case.
+ * Field naming is camelCase (remainingFraction, resetTime, bucketId, displayName, window) — NOT snake_case.
  * resetTime is RFC3339 UTC (e.g. "2026-08-30T05:47:08Z"), remainingFraction is number in [0,1].
  *
- * REDACTED real observed response (the NEW weekly endpoint â€” design spec validated live):
+ * REDACTED real observed response (the NEW weekly endpoint — design spec validated live):
  * // {
  * //   "groups": [
  * //     {
@@ -68,12 +68,12 @@
  * - retrieveUserQuotaSummary: per-GROUP, two windows per group (weekly + 5h), THIS is the only weekly source.
  *
  * Scheduling: weekly resets ~7d (observed 2026-08-23 +7d = 2026-08-30), 5h resets ~5h (same day).
- * Free-tier example: all buckets 1.0 (full). Low-weekly heuristic: weekly < 0.20 â‡’ `low-weekly` tag (HANDOFF Â§8).
+ * Free-tier example: all buckets 1.0 (full). Low-weekly heuristic: weekly < 0.20 → `low-weekly` tag (HANDOFF §8).
  */
 import { z } from "zod";
-import { RemainingFractionSchema, ResetTimeSchema } from "./common";
+import { RemainingFractionSchema, ResetTimeSchema } from "./common.ts";
 
-// â”€â”€ Raw API shapes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Raw API shapes ─────────────────────────────────────────────────────────────
 
 export const WeeklyBucketIdSchema = z.enum(["gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h"]);
 export type WeeklyBucketId = z.infer<typeof WeeklyBucketIdSchema>;
@@ -117,7 +117,7 @@ export type RetrieveUserQuotaSummaryRequest = z.infer<typeof RetrieveUserQuotaSu
 export const RetrieveUserQuotaSummaryResponseSchema = z
   .object({
     // Observed live shape uses groups[]. Spec drafts also showed a fallback
-    // top-level buckets[] without groups â€” accept either, but require at least
+    // top-level buckets[] without groups — accept either, but require at least
     // one so a drifted/empty `{}` payload fails validation instead of parsing
     // as "no quota data".
     groups: z.array(QuotaGroupEntrySchema).optional(),
@@ -130,8 +130,8 @@ export const RetrieveUserQuotaSummaryResponseSchema = z
   });
 export type RetrieveUserQuotaSummaryResponse = z.infer<typeof RetrieveUserQuotaSummaryResponseSchema>;
 
-// â”€â”€ Transformed / stored shapes (HANDOFF Â§8) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// These are NOT the raw response â€” they are how the plugin stores the summary
+// ── Transformed / stored shapes (HANDOFF §8) ─────────────────────────────────────
+// These are NOT the raw response — they are how the plugin stores the summary
 // in AccountStorageV5 (AccountMetadataV5.quotaSummary) after normalizing buckets.
 
 export const QuotaGroupKeySchema = z.enum(["gemini", "3p"]);
@@ -178,8 +178,8 @@ export function inferWindowFromBucketId(bucketId: string): QuotaWindow | undefin
   return undefined;
 }
 
-// Helper: map displayName â†’ QuotaGroupKey (HANDOFF Â§8 mapping is coarser than per-model)
-// "Gemini Models" â†’ "gemini"  ;  "Claude and GPT models" â†’ "3p"
+// Helper: map displayName → QuotaGroupKey (HANDOFF §8 mapping is coarser than per-model)
+// "Gemini Models" → "gemini"  ;  "Claude and GPT models" → "3p"
 export function groupDisplayNameToKey(displayName?: string): QuotaGroupKey | undefined {
   if (!displayName) return undefined;
   const lower = displayName.toLowerCase();
