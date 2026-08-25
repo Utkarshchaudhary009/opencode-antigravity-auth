@@ -11,6 +11,13 @@ import { ANSI } from './ansi';
 /** Default bar length (chars) per the Design 2 spec. */
 export const DEFAULT_BAR_WIDTH = 10;
 
+/**
+ * Upper bound for custom bar widths. Absurdly large finite widths would make
+ * `String.repeat` throw `RangeError: Invalid string length`, so anything past
+ * this cap is clamped instead of crashing the renderer.
+ */
+export const MAX_BAR_WIDTH = 200;
+
 const FILLED_CHAR = '█';
 const EMPTY_CHAR = '░';
 
@@ -25,7 +32,7 @@ function resolveWidth(width: number | undefined): number {
   if (typeof width !== 'number' || !Number.isFinite(width) || width < 1) {
     return DEFAULT_BAR_WIDTH;
   }
-  return Math.floor(width);
+  return Math.min(Math.floor(width), MAX_BAR_WIDTH);
 }
 
 /**

@@ -52,6 +52,13 @@ describe('renderBar', () => {
       expect(renderBar(0.5, Number.NaN)).toHaveLength(DEFAULT_BAR_WIDTH);
       expect(renderBar(0.5, Number.POSITIVE_INFINITY)).toHaveLength(DEFAULT_BAR_WIDTH);
     });
+
+    it('clamps absurdly large finite widths instead of throwing (P3 review fix)', () => {
+      expect(() => renderBar(0.5, 1e10)).not.toThrow();
+      expect(renderBar(0.5, 1e10)).toHaveLength(200);
+      expect(renderBar(0, 1e10)).toHaveLength(200); // defined fraction → uncolored path
+      expect(renderBar(1)).toHaveLength(DEFAULT_BAR_WIDTH); // unaffected default
+    });
   });
 
   describe('undefined handling', () => {
