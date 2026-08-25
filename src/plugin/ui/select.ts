@@ -313,7 +313,10 @@ export async function select<T>(
             .then(() => handler(action))
             .then((rerender) => {
               actionInFlight = false;
-              if (rerender === true) render();
+              // A late completion (e.g. slow quota refresh) after the user
+              // closed the menu must not repaint a dead menu into whatever
+              // screen is active now.
+              if (!isCleanedUp && rerender === true) render();
             })
             .catch(() => {
               // Action hook failures must never take the menu down (fail-open).

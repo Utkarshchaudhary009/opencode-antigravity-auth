@@ -71,22 +71,25 @@ describe('select() gauge keybind dispatch (plugin-local surface)', () => {
         message: 'Gauges',
         onAction: (action) => {
           actions.push(action);
-          return actions.length % 2 === 1; // re-render on odd invocations
+          return true; // every accepted action requests a repaint
         },
       });
 
+      await flush();
+      const writesBeforeActions = terminal.writes.length;
+
       terminal.stdin.emit('data', Buffer.from('\x1b[C')); // right
       await flush();
+      expect(terminal.writes.length).toBeGreaterThan(writesBeforeActions); // true → re-rendered
+
+      const writesAfterRight = terminal.writes.length;
       terminal.stdin.emit('data', Buffer.from('\x1b[D')); // left
       await flush();
       terminal.stdin.emit('data', Buffer.from('r')); // refresh
       await flush();
 
       expect(actions).toEqual(['right', 'left', 'refresh']);
-      const writesAfterActions = terminal.writes.length;
-      await flush();
-      // Re-render happened for the one handler that returned true.
-      expect(terminal.writes.length).toBeGreaterThanOrEqual(writesAfterActions);
+      expect(terminal.writes.length).toBeGreaterThan(writesAfterRight);
 
       terminal.stdin.emit('data', Buffer.from('\x03')); // escape → close
       await expect(menu).resolves.toBe(null);

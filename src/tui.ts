@@ -1088,18 +1088,27 @@ async function runQuotaCheck(api: TuiApi, accountIndex?: number, onBack?: () => 
       continue;
     }
 
+    // Retain the fetched window summary on the stored account so gauge rows
+    // render live data. Storage v4 passes unknown fields through; the v5
+    // migration will formalize the field (fail-open for older readers).
+    const withWeeklyLimits = (account: AccountMetadataV3): AccountMetadataV3 => {
+      if (!result.weeklyLimits) return account;
+      return Object.assign(account, { quotaSummary: result.weeklyLimits }) as AccountMetadataV3;
+    };
+
     if (result.updatedAccount) {
-      storage.accounts[actualIndex] = {
+      storage.accounts[actualIndex] = withWeeklyLimits({
         ...result.updatedAccount,
         cachedQuota: result.quota?.groups,
         cachedQuotaUpdatedAt: Date.now(),
-      };
+      });
       storageUpdated = true;
     } else {
       const acc = storage.accounts[actualIndex];
       if (acc && result.quota?.groups) {
         acc.cachedQuota = result.quota.groups;
         acc.cachedQuotaUpdatedAt = Date.now();
+        withWeeklyLimits(acc);
         storageUpdated = true;
       }
     }
@@ -1414,10 +1423,16 @@ function buildOptions(storage: AccountStorageV4 | null): TuiDialogSelectOption<s
       description: "Re-fetch window limits for the current account (same path as the [R] keybind).",
     },
     {
+      title: "Switch account [←]",
+      value: "action:key-prev",
+      category: "Actions",
+      description: "Rotate to the previous account (menu form of the ← keybind).",
+    },
+    {
       title: "Switch account [→]",
       value: "action:key-switch",
       category: "Actions",
-      description: "Rotate to the next account as active (menu form of the ←/→ keybind).",
+      description: "Rotate to the next account (menu form of the → keybind).",
     },
   ];
 
@@ -1555,6 +1570,10 @@ function showAccountsDialog(api: TuiApi): void {
             }
             if (item.value === "action:key-switch") {
               void handleAccountsKeyAction(api, "right", null);
+              return;
+            }
+            if (item.value === "action:key-prev") {
+              void handleAccountsKeyAction(api, "left", null);
               return;
             }
             handleMainAction(api, item.value);

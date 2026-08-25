@@ -120,10 +120,14 @@ export function formatAge(fetchedAt: number, now: number): string {
   return `${formatWaitShort(Math.max(0, now - fetchedAt))} ago`;
 }
 
-/** Compact single-window cell: `Wk █████░░░░░ 45% resets 3d 2h LOW`. */
+/**
+ * Compact single-window cell: `Wk █████░░░░░ 45% resets 3d 2h LOW`.
+ * The LOW marker is weekly-only by spec (low-WEEKLY warning); short-window
+ * 5-hour depletion must not masquerade as the weekly signal.
+ */
 function formatWindowCell(label: string, bucket: GaugeWindowBucket | undefined, now: number): string {
   const fraction: number | undefined = bucket?.remainingFraction;
-  const low = isLowFraction(fraction) ? " LOW" : "";
+  const low = label === "Wk" && isLowFraction(fraction) ? " LOW" : "";
   const bar = renderBarPlain(fraction, DEFAULT_BAR_WIDTH);
   return `${label} ${bar} ${renderPercentPlain(fraction)}${low}${formatResetSuffix(bucket?.resetTime, now)}`;
 }

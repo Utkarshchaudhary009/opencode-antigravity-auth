@@ -84,6 +84,12 @@ describe('formatGroupGaugeLine', () => {
     expect(boundary).not.toContain('LOW');
   });
 
+  it('never flags the 5-hour cell with LOW (weekly-only warning)', () => {
+    const lowFiveHour = formatGroupGaugeLine({ fiveHour: { remainingFraction: 0.05 } }, NOW);
+    expect(lowFiveHour).toContain('5h █░░░░░░░░░ 5%');
+    expect(lowFiveHour).not.toContain('LOW');
+  });
+
   it('treats a real 0% as data (empty bar + LOW), distinct from n/a', () => {
     const line = formatGroupGaugeLine({ weekly: { remainingFraction: 0 } }, NOW);
     const [weeklyCell] = line.split(' · ');
