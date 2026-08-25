@@ -36,18 +36,31 @@ function resolveWidth(width: number | undefined): number {
 }
 
 /**
- * Render a horizontal gauge bar of `width` cells (`█` filled / `░` empty).
- * Fill = `round(clamped(fraction) * width)`.
- * `undefined`/non-finite fractions render an all-dim placeholder bar.
+ * Render a horizontal gauge bar of `width` cells (`█` filled / `░` empty),
+ * fill = `round(clamped(fraction) * width)`. Plain text only — safe for
+ * surfaces that do not interpret ANSI (e.g. OpenCode DialogSelect rows).
+ * `undefined`/non-finite fractions render an all-empty placeholder bar.
  */
-export function renderBar(fraction: number | undefined, width?: number): string {
+export function renderBarPlain(fraction: number | undefined, width?: number): string {
   const w = resolveWidth(width);
   const clamped = clampFraction(fraction);
   if (clamped === null) {
-    return `${ANSI.dim}${EMPTY_CHAR.repeat(w)}${ANSI.reset}`;
+    return EMPTY_CHAR.repeat(w);
   }
   const filled = Math.round(clamped * w);
   return FILLED_CHAR.repeat(filled) + EMPTY_CHAR.repeat(w - filled);
+}
+
+/**
+ * ANSI variant of {@link renderBarPlain}: identical output except
+ * `undefined`/non-finite fractions render an all-dim placeholder bar.
+ */
+export function renderBar(fraction: number | undefined, width?: number): string {
+  const clamped = clampFraction(fraction);
+  if (clamped === null) {
+    return `${ANSI.dim}${EMPTY_CHAR.repeat(resolveWidth(width))}${ANSI.reset}`;
+  }
+  return renderBarPlain(fraction, width);
 }
 
 /**
@@ -64,6 +77,16 @@ export function getBarColor(fraction: number | undefined): string {
 }
 
 /**
+ * Plain percent label: known values render as `N%`, `undefined`/non-finite
+ * renders bare `n/a` (never `0%`) — for ANSI-free surfaces.
+ */
+export function renderPercentPlain(fraction: number | undefined): string {
+  const clamped = clampFraction(fraction);
+  if (clamped === null) return "n/a";
+  return `${Math.round(clamped * 100)}%`;
+}
+
+/**
  * Percent label for a remaining fraction; `undefined`/non-finite renders a
  * dim `n/a` (never `0%`). Known values stay uncolored so the text survives
  * terminals without ANSI support.
@@ -71,5 +94,5 @@ export function getBarColor(fraction: number | undefined): string {
 export function renderPercent(fraction: number | undefined): string {
   const clamped = clampFraction(fraction);
   if (clamped === null) return `${ANSI.dim}n/a${ANSI.reset}`;
-  return `${Math.round(clamped * 100)}%`;
+  return renderPercentPlain(fraction);
 }

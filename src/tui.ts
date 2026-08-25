@@ -13,6 +13,14 @@ import {
 } from "./plugin/storage";
 import { checkAccountsQuota } from "./plugin/quota";
 import {
+  buildWindowLimitOptions,
+  mapAccountsKeybind,
+  nextAccountIndex,
+  toGaugeAccount,
+  type GaugeAction,
+} from "./plugin/ui/gauge-cards";
+import type { KeyAction } from "./plugin/ui/ansi";
+import {
   initRuntimeConfig,
   loadConfig,
   mergeRuntimeOptions,
@@ -313,6 +321,54 @@ async function setCurrentIndex(index: number): Promise<{ ok: boolean; message: s
 
 function createDialogSelect(api: TuiApi, props: unknown): unknown {
   return api.ui.DialogSelect(props);
+}
+
+/**
+ * Gauge keyboard layer (Design 2): `[R]` refreshes the highlighted account's
+ * quotas via the existing single-account quota path; `[←]`/`[→]` switch the
+ * active account and re-render. Bound through `select()`'s `onAction` hook
+ * (see src/plugin/ui/select.ts).
+ *
+ * Reachability: OpenCode's hosted DialogSelect has no raw-key hook (see the
+ * note on mapAccountsKeybind), so the accounts dialog also exposes equivalent
+ * selectable Actions entries ("Refresh quotas [R]", "Switch account ←/→")
+ * that route into this same handler — one code path for keys and menus.
+ * Surfaces that can capture keys pass parsed actions straight through.
+ */
+export async function handleAccountsKeyAction(api: TuiApi, action: KeyAction, highlightedIndex: number | null): Promise<void> {
+  const gaugeAction: GaugeAction | null = mapAccountsKeybind(action);
+  if (!gaugeAction) return;
+
+  const storage = await loadAccounts();
+  if (!storage || storage.accounts.length === 0) {
+    api.ui.toast({ variant: "error", message: "No accounts found." });
+    return;
+  }
+
+  if (gaugeAction === "refresh-account") {
+    const target = typeof highlightedIndex === "number" && highlightedIndex >= 0 && highlightedIndex < storage.accounts.length
+      ? highlightedIndex
+      : storage.activeIndex;
+    // runQuotaCheck toasts progress ("Checking quota for …") while running —
+    // minimal feedback on the existing path. onBack repaints the accounts
+    // dialog so gauge rows show fresh data instead of a stale list.
+    await runQuotaCheck(api, target, () => showAccountsDialog(api));
+    return;
+  }
+
+  const direction = gaugeAction === "account-next" ? 1 : -1;
+  const target = nextAccountIndex(storage.activeIndex, storage.accounts.length, direction);
+  try {
+    const result = await setCurrentIndex(target);
+    api.ui.toast({ variant: result.ok ? "success" : "error", message: result.message });
+    showAccountsDialog(api);
+  } catch (error) {
+    api.ui.toast({
+      variant: "error",
+      message: error instanceof Error ? error.message : "Failed to update account",
+    });
+    showAccountsDialog(api);
+  }
 }
 
 function resolvePluginOptionsFromState(api: TuiApi): Record<string, unknown> | undefined {
@@ -1032,18 +1088,27 @@ async function runQuotaCheck(api: TuiApi, accountIndex?: number, onBack?: () => 
       continue;
     }
 
+    // Retain the fetched window summary on the stored account so gauge rows
+    // render live data. Storage v4 passes unknown fields through; the v5
+    // migration will formalize the field (fail-open for older readers).
+    const withWeeklyLimits = (account: AccountMetadataV3): AccountMetadataV3 => {
+      if (!result.weeklyLimits) return account;
+      return Object.assign(account, { quotaSummary: result.weeklyLimits }) as AccountMetadataV3;
+    };
+
     if (result.updatedAccount) {
-      storage.accounts[actualIndex] = {
+      storage.accounts[actualIndex] = withWeeklyLimits({
         ...result.updatedAccount,
         cachedQuota: result.quota?.groups,
         cachedQuotaUpdatedAt: Date.now(),
-      };
+      });
       storageUpdated = true;
     } else {
       const acc = storage.accounts[actualIndex];
       if (acc && result.quota?.groups) {
         acc.cachedQuota = result.quota.groups;
         acc.cachedQuotaUpdatedAt = Date.now();
+        withWeeklyLimits(acc);
         storageUpdated = true;
       }
     }
@@ -1351,6 +1416,24 @@ function buildOptions(storage: AccountStorageV4 | null): TuiDialogSelectOption<s
       category: "Actions",
       description: "Reload the account pool from disk.",
     },
+    {
+      title: "Refresh quotas [R]",
+      value: "action:key-refresh",
+      category: "Actions",
+      description: "Re-fetch window limits for the current account (same path as the [R] keybind).",
+    },
+    {
+      title: "Switch account [←]",
+      value: "action:key-prev",
+      category: "Actions",
+      description: "Rotate to the previous account (menu form of the ← keybind).",
+    },
+    {
+      title: "Switch account [→]",
+      value: "action:key-switch",
+      category: "Actions",
+      description: "Rotate to the next account (menu form of the → keybind).",
+    },
   ];
 
   if (!storage || storage.accounts.length === 0) {
@@ -1374,6 +1457,24 @@ function buildOptions(storage: AccountStorageV4 | null): TuiDialogSelectOption<s
       category: "Accounts",
       description: accountSummary(i, account, storage.activeIndex, now),
     });
+  }
+
+  // Window Limits (Design 2): non-selectable gauge rows above the accounts
+  // layer. `info:`-prefixed values fall through handleMainAction's default —
+  // the same non-selectable idiom used by the Cached quota rows.
+  for (let i = 0; i < storage.accounts.length; i++) {
+    const account = storage.accounts[i];
+    if (!account) {
+      continue;
+    }
+    for (const option of buildWindowLimitOptions(toGaugeAccount(account), now)) {
+      list.push({
+        title: `${accountTitle(i, account)} — ${option.title}`,
+        value: `info:${option.value}:${i}`,
+        category: "Window Limits",
+        description: option.description,
+      });
+    }
   }
 
   list.push({
@@ -1457,6 +1558,22 @@ function showAccountsDialog(api: TuiApi): void {
               if (Number.isFinite(index) && index >= 0) {
                 showAccountActions(api, index);
               }
+              return;
+            }
+            // Menu equivalents of the [R]/[←]/[→] keybinds (DialogSelect has
+            // no raw-key hook) — same handler, one code path. The combined
+            // switch entry rotates forward deterministically; the [←]/[→]
+            // keybinds on select() surfaces offer both directions.
+            if (item.value === "action:key-refresh") {
+              void handleAccountsKeyAction(api, "refresh", null);
+              return;
+            }
+            if (item.value === "action:key-switch") {
+              void handleAccountsKeyAction(api, "right", null);
+              return;
+            }
+            if (item.value === "action:key-prev") {
+              void handleAccountsKeyAction(api, "left", null);
               return;
             }
             handleMainAction(api, item.value);

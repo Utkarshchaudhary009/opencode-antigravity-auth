@@ -13,6 +13,26 @@ describe('ansi', () => {
       expect(parseKey(Buffer.from('\x1bOB'))).toBe('down');
     });
 
+    it('parses arrow left sequences', () => {
+      expect(parseKey(Buffer.from('\x1b[D'))).toBe('left');
+      expect(parseKey(Buffer.from('\x1bOD'))).toBe('left');
+    });
+
+    it('parses arrow right sequences', () => {
+      expect(parseKey(Buffer.from('\x1b[C'))).toBe('right');
+      expect(parseKey(Buffer.from('\x1bOC'))).toBe('right');
+    });
+
+    it('parses r/R as refresh', () => {
+      expect(parseKey(Buffer.from('r'))).toBe('refresh');
+      expect(parseKey(Buffer.from('R'))).toBe('refresh');
+    });
+
+    it('parses t/T as toggle-view', () => {
+      expect(parseKey(Buffer.from('t'))).toBe('toggle-view');
+      expect(parseKey(Buffer.from('T'))).toBe('toggle-view');
+    });
+
     it('parses enter key (CR and LF)', () => {
       expect(parseKey(Buffer.from('\r'))).toBe('enter');
       expect(parseKey(Buffer.from('\n'))).toBe('enter');
@@ -36,11 +56,6 @@ describe('ansi', () => {
     it('returns null for partial escape sequences', () => {
       expect(parseKey(Buffer.from('\x1b['))).toBe(null);
       expect(parseKey(Buffer.from('\x1bO'))).toBe(null);
-    });
-
-    it('returns null for other arrow keys', () => {
-      expect(parseKey(Buffer.from('\x1b[C'))).toBe(null);
-      expect(parseKey(Buffer.from('\x1b[D'))).toBe(null);
     });
   });
 

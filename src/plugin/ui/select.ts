@@ -1,4 +1,4 @@
-import { ANSI, isTTY, parseKey } from './ansi';
+import { ANSI, isTTY, parseKey, type KeyAction } from './ansi';
 
 export interface MenuItem<T = string> {
   label: string;
@@ -21,6 +21,14 @@ export interface SelectOptions {
    * Useful for nested flows where previous logs make menus feel cluttered.
    */
   clearScreen?: boolean;
+  /**
+   * Hook for extra keys beyond up/down/enter/esc (`left`, `right`,
+   * `refresh`, `toggle-view`). Return true to re-render the menu (e.g.
+   * after refreshing data, switching the highlighted account, or flipping
+   * the view mode). Errors thrown here are ignored — the menu must keep
+   * working (fail-open).
+   */
+  onAction?: (action: Exclude<KeyAction, null>) => boolean | Promise<boolean>;
 }
 
 const ESCAPE_TIMEOUT_MS = 50;
@@ -106,6 +114,7 @@ export async function select<T>(
   let cursor = items.findIndex(isSelectable);
   if (cursor === -1) cursor = 0; // Fallback, though validation above should prevent this
   let escapeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let actionInFlight = false;
   let isCleanedUp = false;
   let renderedLines = 0;
 
@@ -289,6 +298,32 @@ export async function select<T>(
             finishWithValue(null);
           }, ESCAPE_TIMEOUT_MS);
           return;
+        case 'left':
+        case 'right':
+        case 'refresh':
+        case 'toggle-view': {
+          const handler = options.onAction;
+          if (!handler) return;
+          // In-flight guard: ignore further action keys while a previous
+          // async action (e.g. quota refresh) is still running, so repeated
+          // keystrokes cannot race into double side effects.
+          if (actionInFlight) return;
+          actionInFlight = true;
+          void Promise.resolve()
+            .then(() => handler(action))
+            .then((rerender) => {
+              actionInFlight = false;
+              // A late completion (e.g. slow quota refresh) after the user
+              // closed the menu must not repaint a dead menu into whatever
+              // screen is active now.
+              if (!isCleanedUp && rerender === true) render();
+            })
+            .catch(() => {
+              // Action hook failures must never take the menu down (fail-open).
+              actionInFlight = false;
+            });
+          return;
+        }
         default:
           // Unknown key - ignore
           return;
