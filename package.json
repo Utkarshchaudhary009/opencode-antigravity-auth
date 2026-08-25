@@ -1,6 +1,6 @@
 {
     "name": "opencode-antigravity-auth",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "description": "Antigravity auth and runtime plugin for OpenCode",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
