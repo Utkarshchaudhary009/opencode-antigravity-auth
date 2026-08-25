@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ANSI } from './ansi';
-import { DEFAULT_BAR_WIDTH, getBarColor, renderBar, renderPercent } from './bar';
+import { DEFAULT_BAR_WIDTH, getBarColor, renderBar, renderBarPlain, renderPercent, renderPercentPlain } from './bar';
 
 describe('renderBar', () => {
   describe('default width', () => {
@@ -74,6 +74,38 @@ describe('renderBar', () => {
     it('respects custom width for the placeholder bar', () => {
       expect(renderBar(undefined, 5)).toBe(`${ANSI.dim}░░░░░${ANSI.reset}`);
     });
+  });
+});
+
+describe('renderBarPlain', () => {
+  it('matches renderBar for known fractions (no ANSI anywhere)', () => {
+    expect(renderBarPlain(0.5)).toBe(renderBar(0.5));
+    expect(renderBarPlain(0.5)).toBe('█████░░░░░');
+    expect(renderBarPlain(0)).toBe('░░░░░░░░░░');
+    expect(renderBarPlain(1, 5)).toBe('█████');
+    expect(renderBarPlain(0.999)).not.toContain('\x1b');
+  });
+
+  it('renders a bare placeholder bar for undefined — no dim codes', () => {
+    const plain = renderBarPlain(undefined);
+    expect(plain).toBe('░░░░░░░░░░');
+    expect(plain).not.toContain(ANSI.dim);
+    expect(plain).not.toContain(ANSI.reset);
+  });
+});
+
+describe('renderPercentPlain', () => {
+  it('renders bare percents and bare n/a', () => {
+    expect(renderPercentPlain(0.45)).toBe('45%');
+    expect(renderPercentPlain(undefined)).toBe('n/a');
+    expect(renderPercentPlain(Number.NaN)).toBe('n/a');
+    expect(renderPercentPlain(undefined)).not.toContain('\x1b');
+  });
+
+  it('agrees with the ANSI variant on known values', () => {
+    for (const value of [0, 0.2, 0.5, 0.666, 1]) {
+      expect(renderPercentPlain(value as number)).toBe(renderPercent(value as number));
+    }
   });
 });
 

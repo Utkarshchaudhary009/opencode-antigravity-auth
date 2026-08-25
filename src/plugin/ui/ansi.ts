@@ -24,7 +24,17 @@ export const ANSI = {
   inverse: '\x1b[7m',
 } as const;
 
-export type KeyAction = 'up' | 'down' | 'enter' | 'escape' | 'escape-start' | null;
+export type KeyAction =
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'enter'
+  | 'escape'
+  | 'escape-start'
+  | 'refresh'
+  | 'toggle-view'
+  | null;
 
 /**
  * Parse raw keyboard input buffer into a key action.
@@ -32,20 +42,28 @@ export type KeyAction = 'up' | 'down' | 'enter' | 'escape' | 'escape-start' | nu
  */
 export function parseKey(data: Buffer): KeyAction {
   const s = data.toString();
-  
+
   // Arrow keys (ANSI escape sequences)
   // Standard: \x1b[A (up), \x1b[B (down)
   // Application mode: \x1bOA (up), \x1bOB (down)
   if (s === '\x1b[A' || s === '\x1bOA') return 'up';
   if (s === '\x1b[B' || s === '\x1bOB') return 'down';
-  
+  if (s === '\x1b[D' || s === '\x1bOD') return 'left';
+  if (s === '\x1b[C' || s === '\x1bOC') return 'right';
+
   // Enter (CR or LF)
   if (s === '\r' || s === '\n') return 'enter';
-  
+
+  // Refresh shortcut for gauge/menu screens
+  if (s === 'r' || s === 'R') return 'refresh';
+
+  // View toggle for gauge detail screens
+  if (s === 't' || s === 'T') return 'toggle-view';
+
   if (s === '\x03') return 'escape';
-  
+
   if (s === '\x1b') return 'escape-start';
-  
+
   return null;
 }
 
