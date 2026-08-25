@@ -19,6 +19,11 @@ import {
   toGaugeAccount,
   type GaugeAction,
 } from "./plugin/ui/gauge-cards";
+import {
+  buildGaugeDetailOptions,
+  getDetailMode,
+  toggleDetailMode,
+} from "./plugin/ui/gauge-detail";
 import type { KeyAction } from "./plugin/ui/ansi";
 import {
   initRuntimeConfig,
@@ -1262,9 +1267,30 @@ function showAccountActions(api: TuiApi, index: number): void {
       }
 
       const now = Date.now();
+      // Window-limit detail card (Design 2 upper layer): window groups first,
+      // legacy "Cached quota" rows stay below via cachedQuotaOptions — the
+      // card skips its own legacy section to avoid duplicate taxonomy.
+      const detailRows = buildGaugeDetailOptions(account, { now, includeLegacy: false }).map(
+        (row): TuiDialogSelectOption<string> => ({
+          title: row.title,
+          value: `info:${row.value}:${index}`,
+          category: row.category,
+          description: row.description,
+        }),
+      );
+      // No "(T)" hint: this DialogSelect surface cannot capture raw keys;
+      // the [T] keybind applies to plugin select() surfaces only.
+      const viewToggleTitle = getDetailMode() === "gauge" ? "View as compact table" : "View as gauge cards";
       const options: TuiDialogSelectOption<string>[] = [
+        ...detailRows,
         ...accountInfoOptions(index, account, storage.activeIndex, now),
         ...cachedQuotaOptions(account),
+        {
+          title: viewToggleTitle,
+          value: `action:view-toggle:${index}`,
+          category: "Actions",
+          description: "Switch the window-limit card between gauge bars and a plain table.",
+        },
         {
           title: "Refresh quota",
           value: `quota:${index}`,
@@ -1305,6 +1331,12 @@ function showAccountActions(api: TuiApi, index: number): void {
           onSelect: (item: TuiDialogSelectOption<string>) => {
             if (item.value === "back") {
               showAccountsDialog(api);
+              return;
+            }
+
+            if (item.value.startsWith("action:view-toggle:")) {
+              toggleDetailMode();
+              showAccountActions(api, index);
               return;
             }
 
