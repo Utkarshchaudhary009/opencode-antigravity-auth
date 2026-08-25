@@ -22,7 +22,7 @@ import { AntigravityTokenRefreshError, refreshAccessToken } from "./token";
 import { getModelFamily } from "./transform/model-resolver";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import type { AccountMetadataV3 } from "./storage";
-import { normalizeRemainingFraction, parseResetTime } from "../../schema/common";
+import { normalizeRemainingFraction, parseResetTime } from "../../schema/common.ts";
 import {
   emptyQuotaWindowSummary,
   fetchWeeklyLimits,
