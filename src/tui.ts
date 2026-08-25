@@ -1278,7 +1278,9 @@ function showAccountActions(api: TuiApi, index: number): void {
           description: row.description,
         }),
       );
-      const viewToggleTitle = getDetailMode() === "gauge" ? "View as compact table (T)" : "View as gauge cards (T)";
+      // No "(T)" hint: this DialogSelect surface cannot capture raw keys;
+      // the [T] keybind applies to plugin select() surfaces only.
+      const viewToggleTitle = getDetailMode() === "gauge" ? "View as compact table" : "View as gauge cards";
       const options: TuiDialogSelectOption<string>[] = [
         ...detailRows,
         ...accountInfoOptions(index, account, storage.activeIndex, now),

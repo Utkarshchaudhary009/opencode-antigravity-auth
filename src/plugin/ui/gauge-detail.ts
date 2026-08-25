@@ -207,8 +207,9 @@ export function buildGaugeDetailOptions(
     ...overrides,
     mode: overrides.mode ?? getDetailMode(),
     // Width-driven default (P1-3): micro variant activates automatically on
-    // narrow terminals; unmeasurable width fails open to the full layout.
-    layout: overrides.layout ?? resolveDetailLayout(overrides.width),
+    // narrow terminals. When the host passes no width, measure the terminal;
+    // unmeasurable width still fails open to the full layout.
+    layout: overrides.layout ?? resolveDetailLayout(overrides.width ?? terminalWidth()),
     includeLegacy: overrides.includeLegacy ?? true,
   };
   const rows: GaugeDetailRow[] = [];

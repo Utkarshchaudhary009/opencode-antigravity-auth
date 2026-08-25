@@ -31,11 +31,17 @@ function summary(overrides: Partial<GaugeWindowSummary> = {}): GaugeWindowSummar
   };
 }
 
+const ORIGINAL_STDOUT = process.stdout;
+
 beforeEach(() => {
   setDetailMode('gauge');
+  // Deterministic terminal geometry: wide enough for the full layout so
+  // default-path tests never depend on the host environment's columns.
+  Object.defineProperty(process, 'stdout', { configurable: true, value: { ...ORIGINAL_STDOUT, columns: 100 } });
 });
 
 afterEach(() => {
+  Object.defineProperty(process, 'stdout', { configurable: true, value: ORIGINAL_STDOUT });
   vi.useRealTimers();
 });
 
@@ -99,12 +105,6 @@ describe('mapDetailKeybind', () => {
 });
 
 describe('terminalWidth', () => {
-  const original = process.stdout;
-
-  afterEach(() => {
-    Object.defineProperty(process, 'stdout', { configurable: true, value: original });
-  });
-
   it('passes through measurable columns', () => {
     Object.defineProperty(process, 'stdout', { configurable: true, value: { columns: 55 } });
     expect(terminalWidth()).toBe(55);
@@ -115,6 +115,18 @@ describe('terminalWidth', () => {
     expect(terminalWidth()).toBeUndefined();
     Object.defineProperty(process, 'stdout', { configurable: true, value: { columns: Number.NaN } });
     expect(terminalWidth()).toBeUndefined();
+  });
+
+  it('feeds the default layout: no width + narrow terminal → micro', () => {
+    Object.defineProperty(process, 'stdout', { configurable: true, value: { columns: 40 } });
+    const rows = buildGaugeDetailOptions({ quotaSummary: summary() }, { now: NOW });
+    expect(rows.some((row) => row.value === 'wld:micro:gemini')).toBe(true);
+  });
+
+  it('feeds the default layout: unmeasurable terminal → full (fail-open)', () => {
+    Object.defineProperty(process, 'stdout', { configurable: true, value: {} });
+    const rows = buildGaugeDetailOptions({ quotaSummary: summary() }, { now: NOW });
+    expect(rows.some((row) => row.value === 'wld:gemini:weekly')).toBe(true);
   });
 });
 
