@@ -43,6 +43,7 @@ import type { PluginClient } from "./plugin/types";
 
 const TUI_PLUGIN_ID = "opencode-antigravity-auth:tui";
 const COMMAND_OPEN = "antigravity.accounts";
+const COMMAND_USAGE = "antigravity.accounts.usage";
 const COMMAND_RELOAD = "antigravity.accounts.reload";
 const log = createLogger("tui");
 
@@ -1519,6 +1520,78 @@ function buildOptions(storage: AccountStorageV4 | null): TuiDialogSelectOption<s
   return list;
 }
 
+/**
+ * Pure option builder for the `/ag-usage` view: one compact window-limit
+ * gauge line per account (gemini|3p only), failing open to placeholder rows
+ * when a summary is missing. Exported for unit tests like formatQuotaPercent.
+ */
+export function buildUsageOptions(storage: AccountStorageV4 | null, now: number): TuiDialogSelectOption<string>[] {
+  const list: TuiDialogSelectOption<string>[] = [];
+  if (!storage || storage.accounts.length === 0) {
+    list.push({
+      title: "No accounts found",
+      value: "info:none",
+      category: "Window Limits",
+      description: "Open /ag-accounts and add an Antigravity account first.",
+    });
+    return list;
+  }
+
+  for (let i = 0; i < storage.accounts.length; i++) {
+    const account = storage.accounts[i];
+    if (!account) {
+      continue;
+    }
+    for (const option of buildWindowLimitOptions(toGaugeAccount(account), now)) {
+      list.push({
+        title: `${accountTitle(i, account)} — ${option.title}`,
+        value: `info:${option.value}:${i}`,
+        category: "Window Limits",
+        description: option.description,
+      });
+    }
+  }
+  return list;
+}
+
+/**
+ * `/ag-usage` target: the Window Limits gauge surface directly, skipping the
+ * full accounts dialog. Read-only (all rows are `info:` non-selectables plus
+ * a single navigation row) and fail-open when no quota data exists yet.
+ */
+function showUsageDialog(api: TuiApi): void {
+  loadAccounts()
+    .then((storage) => {
+      const options: TuiDialogSelectOption<string>[] = [
+        ...buildUsageOptions(storage, Date.now()),
+        {
+          title: "Manage accounts",
+          value: "action:open-accounts",
+          category: "Navigation",
+          description: "Open the full account manager (/ag-accounts).",
+        },
+      ];
+      api.ui.dialog.setSize("xlarge");
+      api.ui.dialog.replace(() =>
+        createDialogSelect(api, {
+          title: "Antigravity Usage — Window Limits",
+          options,
+          onSelect: (item: TuiDialogSelectOption<string>) => {
+            if (item.value === "action:open-accounts") {
+              showAccountsDialog(api);
+            }
+          },
+        }),
+      );
+    })
+    .catch((error) => {
+      api.ui.toast({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Failed to load usage data",
+      });
+    });
+}
+
 function handleMainAction(api: TuiApi, value: string): void {
   switch (value) {
     case "action:add":
@@ -1644,6 +1717,17 @@ const tui = async (api: TuiApi, options?: Record<string, unknown>): Promise<void
         aliases: ["ag"],
       },
       onSelect: () => showAccountsDialog(api),
+    },
+    {
+      title: "Antigravity Usage",
+      value: COMMAND_USAGE,
+      category: "Provider",
+      description: "Open window-limit usage gauges for all accounts",
+      slash: {
+        name: "ag-usage",
+        aliases: ["ag-quota"],
+      },
+      onSelect: () => showUsageDialog(api),
     },
     {
       title: "Reload Antigravity Accounts",
